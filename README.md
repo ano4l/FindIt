@@ -18,6 +18,14 @@ pnpm build
 pnpm preview
 ```
 
+## Deploy to Vercel
+
+This repository is configured as a static Vite site for Vercel. Import `ano4l/FindIt` from the Vercel dashboard and use the repository root as the project root. Vercel will use the project configuration to run `pnpm build`, publish `dist`, and serve the app entry point for direct SPA paths. The `pnpm-lock.yaml` file lets Vercel detect the package manager automatically.
+
+The only optional environment variable is `VITE_ANNUAL_MEMBERSHIP_PRICE`, used to change the illustrative price shown in the demo. Set it in Vercel Project Settings under Environment Variables for the environments you need, then redeploy. `VITE_` variables are included in browser code, so never put private credentials in them. No other environment variables or service credentials are required for this static preview.
+
+Pushing to the connected `main` branch creates a production deployment; branches and pull requests can create preview deployments. This prepares the frontend for hosting only. It does not add backend authentication, protected admin access, a database, messaging, billing, or AI services.
+
 ## What's included
 
 - Responsive public landing page and locator directory.
