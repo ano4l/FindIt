@@ -1,76 +1,102 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, Bookmark, ExternalLink, House, MapPin, Menu, Search, ShieldCheck, X } from "lucide-react";
-import { AuthScreen, MemberAccount, StaffConsole } from "./account.jsx";
-import { api, formatDate } from "./api.js";
+import { AuthScreen, MemberAccount } from "./account.jsx";
+import { StaffConsole } from "./staff.jsx";
+import { api } from "./api.js";
+import { Link, Shell, go, pathNow, usePageTitle } from "./ui.jsx";
+import { ApartmentsPage, PropertyPage } from "./properties.jsx";
+import { LocatorProfilePage, LocatorsPage } from "./locators.jsx";
+import {
+  ContactPage, ForLocatorsPage, ForOwnersPage, HomePage, HowItWorksPage, NotFoundPage, PricingPage, PrivacyPage, TermsPage,
+} from "./pages.jsx";
 import "./styles.css";
 import "./account.css";
+import "./findit.css";
 
-const specialtyOptions = ["Luxury", "High-rises", "Relocation", "Student housing", "Corporate", "Pet friendly", "First-time renters", "New construction"];
-const pathNow = () => window.location.pathname;
-const queryNow = () => new URLSearchParams(window.location.search);
-function go(url) { window.history.pushState({}, "", url); window.dispatchEvent(new PopStateEvent("popstate")); window.scrollTo(0, 0); }
-function Link({ href, children, ...props }) { return <a href={href} {...props} onClick={(e) => { props.onClick?.(e); if (!e.defaultPrevented && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) { e.preventDefault(); go(href); } }}>{children}</a>; }
-
-function Header({ user, count, signOut }) {
-  const [open, setOpen] = useState(false);
-  const nav = [["Find locators", "/locators"], ["How it works", "/how-it-works"], ["For locators", "/for-locators"], ["Pricing", "/pricing"], ["Contact", "/contact"]];
-  return <header className="site-header"><div className="nav-shell">
-    <Link className="brand" href="/"><span className="brand-mark"><House size={21} strokeWidth={3}/></span><span>FINDIT<span className="brand-period">.</span></span><span className="brand-city">HTX</span></Link>
-    <nav className={`main-nav ${open ? "is-open" : ""}`} aria-label="Main navigation">{nav.map(([label, href]) => <Link key={href} href={href} onClick={() => setOpen(false)}>{label}</Link>)}</nav>
-    <div className="nav-actions">{user ? <><Link className="nav-login" href={user.role === "staff" ? "/staff" : "/account"}>{user.role === "staff" ? "Staff console" : `Saved (${count})`}</Link><button className="button button-dark nav-join" onClick={signOut}>Log out</button></> : <><Link className="nav-login" href="/signin">Log in</Link><Link className="button button-dark nav-join" href="/signup">Join FindIt <ArrowRight size={15}/></Link></>}</div>
-    <button className="mobile-menu-button" aria-label={open ? "Close menu" : "Open menu"} onClick={() => setOpen(!open)}>{open ? <X/> : <Menu/>}</button>
-  </div></header>;
-}
-function Footer() { return <footer className="site-footer"><div className="page-shell footer-main"><div className="footer-brand-col"><Link className="brand brand-light" href="/"><span className="brand-mark"><House size={21}/></span><span>FINDIT<span className="brand-period">.</span></span><span className="brand-city">HTX</span></Link><p>A more human way to find your next home in Houston.</p><span className="footer-location"><MapPin size={14}/> Houston, Texas</span></div><div className="footer-column"><strong>EXPLORE</strong><Link href="/locators">Find locators</Link><Link href="/how-it-works">How it works</Link><Link href="/for-locators">For locators</Link><Link href="/pricing">Pricing</Link></div><div className="footer-column"><strong>HELP &amp; ACCOUNT</strong><Link href="/contact">Contact</Link><Link href="/signin">Log in</Link><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></div></div><div className="page-shell footer-bottom"><span>Copyright 2026 Findit HTX</span><span>Built for Houston.</span></div></footer>; }
-function Shell({ children, user, count, signOut }) { return <><Header user={user} count={count} signOut={signOut}/>{children}<Footer/></>; }
-function SearchForm({ initial = "", initialSpecialty = "" }) {
-  const [q, setQ] = useState(initial); const [specialty, setSpecialty] = useState(initialSpecialty);
-  useEffect(() => { setQ(initial); setSpecialty(initialSpecialty); }, [initial, initialSpecialty]);
-  return <form className="search-panel" onSubmit={(e) => { e.preventDefault(); const p = new URLSearchParams(); if (q.trim()) p.set("q", q.trim()); if (specialty) p.set("specialty", specialty); go(`/locators${p.size ? `?${p}` : ""}`); }}>
-    <label className="search-field location-field"><span className="field-label">Search by neighborhood, city or ZIP</span><span className="input-wrap"><MapPin size={17}/><input aria-label="Search by neighborhood, city or ZIP" value={q} onChange={(e) => setQ(e.target.value)} placeholder="The Heights, Houston or 77380"/></span></label>
-    <label className="search-field"><span className="field-label">Specialty</span><span className="select-wrap"><select aria-label="Specialty" value={specialty} onChange={(e) => setSpecialty(e.target.value)}><option value="">All specialties</option>{specialtyOptions.map((s) => <option key={s}>{s}</option>)}</select></span></label>
-    <button className="button button-dark search-button" type="submit"><Search size={17}/> Search locators</button>
-  </form>;
-}
-function LocatorCard({ locator, saved, onSave }) { return <article className="locator-card"><div className="card-photo-wrap">{locator.image ? <><img className="card-photo" src={locator.image} alt={locator.name ? `${locator.name} profile` : "Locator profile"} onError={(e) => { e.currentTarget.hidden = true; e.currentTarget.nextElementSibling.hidden = false; }}/><div className="photo-unknown" role="img" aria-label="Photo unavailable" hidden>Photo unavailable</div></> : <div className="photo-unknown" role="img" aria-label="Photo unknown">Photo unknown</div>}<button className={`save-button ${saved ? "is-saved" : ""}`} onClick={() => onSave(locator)} aria-label={saved ? `Remove ${locator.name} from saved locators` : `Save ${locator.name}`}><Bookmark size={17} fill={saved ? "currentColor" : "none"}/></button></div><div className="card-body">{locator.source === "Sample data" && <span className="sample-note">Sample profile</span>}<h3>{locator.name || "Name unknown"}</h3><p className="company-name">{locator.company || "Company unknown"}</p><div className="card-location"><MapPin size={14}/><span>{locator.area || "Area unknown"}</span></div><div className="tag-row">{(locator.tags || []).slice(0, 3).map((t) => <span className="tag" key={t}>{t}</span>)}</div><p className="card-bio">{locator.about || "About information unknown."}</p><Link className="button card-cta" href={`/locators/${encodeURIComponent(locator.id)}`}>View profile <ArrowRight size={15}/></Link></div></article>; }
-function ReportForm({ id }) { const [open, setOpen] = useState(false); const [done, setDone] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); return <div className="report-box">{done ? <p className="form-ok" role="status">{done}</p> : !open ? <button className="link-button" onClick={() => setOpen(true)}>Report a problem with this profile</button> : <form className="report-form" onSubmit={async (e) => { e.preventDefault(); setBusy(true); setError(""); const f = new FormData(e.currentTarget); try { const result = await api.report(id, { reason: f.get("reason"), details: f.get("details") }); setDone(result.message); } catch (x) { setError(x.message); } finally { setBusy(false); } }}><label>What’s wrong?<select name="reason" required><option>Wrong or outdated information</option><option>Broken listings link</option><option>Not a real locator</option><option>Inappropriate content</option><option>Other</option></select></label><label>Details (optional)<textarea name="details" rows="3" maxLength="1000"/></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-dark" disabled={busy}>{busy ? "Sending…" : "Send report"}</button></form>}</div>; }
-function ContactPage() { const [state, setState] = useState({ busy: false, error: "", message: "" }); async function submit(e) { e.preventDefault(); const form = e.currentTarget; const data = Object.fromEntries(new FormData(form)); setState({ busy: true, error: "", message: "" }); try { const r = await api.contact(data); form.reset(); setState({ busy: false, error: "", message: r.message }); } catch (error) { setState({ busy: false, error: error.message, message: "" }); } } return <form className="contact-form" onSubmit={submit}><label>Your name<input name="name" autoComplete="name" minLength="2" maxLength="80" required/></label><label>Email address<input name="email" type="email" autoComplete="email" maxLength="320" required/></label><label>How can we help?<textarea name="message" rows="5" minLength="10" maxLength="2000" required/></label>{state.error && <p className="form-error" role="alert">{state.error}</p>}{state.message && <p className="form-ok" role="status">{state.message}</p>}<button className="button button-dark" disabled={state.busy}>{state.busy ? "Sending…" : "Send message"} <ArrowRight size={15}/></button></form>; }
+const INFO_PAGES = {
+  "/how-it-works": HowItWorksPage, "/for-owners": ForOwnersPage, "/for-locators": ForLocatorsPage,
+  "/pricing": PricingPage, "/privacy": PrivacyPage, "/terms": TermsPage,
+};
+const AUTH_ROUTES = { "/signin": "signin", "/signup": "signup", "/forgot-password": "forgot", "/reset-password": "reset", "/verify-email": "verify" };
+const EMPTY_SAVED = { locators: [], properties: [] };
 
 function App() {
-  const [route, setRoute] = useState(pathNow()); const [search, setSearch] = useState(window.location.search);
-  const [user, setUser] = useState(null); const [authReady, setAuthReady] = useState(false); const [saved, setSaved] = useState([]); const [savedError, setSavedError] = useState(""); const [locators, setLocators] = useState([]); const [loadError, setLoadError] = useState(""); const [loadState, setLoadState] = useState("loading");
-  useEffect(() => { const pop = () => { setRoute(pathNow()); setSearch(window.location.search); }; window.addEventListener("popstate", pop); return () => window.removeEventListener("popstate", pop); }, []);
-  useEffect(() => { api.me().then((r) => setUser(r.user)).catch(() => setUser(null)).finally(() => setAuthReady(true)); api.locators({}).then((r) => { setLocators(r.locators); setLoadState("ready"); }).catch((e) => { setLoadError(e.message); setLoadState("error"); }); }, []);
-  useEffect(() => { if (!user) { setSaved([]); setSavedError(""); return; } setSavedError(""); api.favourites().then((r) => setSaved(r.locators)).catch((e) => setSavedError(e.message)); }, [user]);
-  const toggleSave = async (l) => { if (!user) return go("/signin"); const found = saved.some((x) => x.id === l.id); setSaved((xs) => found ? xs.filter((x) => x.id !== l.id) : [l, ...xs]); try { await (found ? api.unsave(l.id) : api.save(l.id)); } catch { setSaved((xs) => found ? [l, ...xs] : xs.filter((x) => x.id !== l.id)); } };
-  const signOut = async () => { try { await api.logout(); } catch {} setUser(null); go("/"); };
-  const params = new URLSearchParams(search); const q = params.get("q") || ""; const specialty = params.get("specialty") || "";
-  const visible = useMemo(() => { const needle = q.toLowerCase().replace(/,?\s*tx$/, "").trim(); return locators.filter((l) => { const text = [l.name, l.company, l.area, ...(l.serviceAreas || []), ...(l.zipCodes || [])].join(" ").toLowerCase(); return (!needle || needle === "houston" || text.includes(needle)) && (!specialty || (l.tags || []).some((t) => t.toLowerCase() === specialty.toLowerCase())); }); }, [locators, q, specialty]);
-  const profileMatch = route.match(/^\/locators\/([^/]+)\/?$/); const profileId = profileMatch ? decodeURIComponent(profileMatch[1]) : ""; const [profile, setProfile] = useState(null); const [profileState, setProfileState] = useState("loading");
-  useEffect(() => { if (!profileId) return; setProfile(null); setProfileState("loading"); api.locator(profileId).then(({ locator }) => { setProfile(locator); setProfileState("ready"); }).catch((e) => { setLoadError(e.message); setProfileState(e.status === 404 ? "missing" : "error"); }); }, [profileId]);
-  useEffect(() => { if (authReady && (route === "/account" || route === "/staff") && !user) go("/signin"); }, [route, authReady, user]);
-  if ((route === "/account" || route === "/staff") && !authReady) return <main className="page-shell route-page"><p role="status">Checking your account…</p></main>;
-  if ((route === "/account" || route === "/staff") && !user) return null;
-  const cleanAuth = route === "/signin" || route === "/signup" || route === "/forgot-password" || route === "/reset-password" || route === "/verify-email" || (route === "/" && (params.has("verify") || params.has("reset")));
-  if (cleanAuth) { const mode = route === "/signin" ? "signin" : route === "/signup" ? "signup" : route === "/forgot-password" ? "forgot" : route === "/reset-password" || params.has("reset") ? "reset" : "verify"; const token = params.get("token") || params.get("reset") || params.get("verify"); return <AuthScreen key={`${mode}-${token || ""}`} mode={mode} token={token} onMode={(m) => go(m === "forgot" ? "/forgot-password" : `/${m}`)} onHome={() => go("/")} onSignedIn={(u) => { setUser(u); go(u.role === "staff" ? "/staff" : "/account"); }}/>; }
-  if (route === "/account" && user) return <MemberAccount user={user} saved={saved} savedError={savedError} onUnsave={(id) => { const l = saved.find((x) => x.id === id); if (l) toggleSave(l); }} onOpenProfile={(l) => go(`/locators/${encodeURIComponent(l.id)}`)} onHome={() => go("/")} onSignOut={signOut}/>;
-  if (route === "/staff" && user?.role === "staff") return <StaffConsole user={user} onHome={() => go("/")} onSignOut={signOut}/>;
-  const shellProps = { user, count: saved.length, signOut };
-  if (profileId) return <Shell {...shellProps}><main className="page-shell route-page">{profileState === "loading" ? <p role="status">Loading profile…</p> : profileState !== "ready" ? <div className="empty-state"><h1>This profile isn’t available</h1><p>{profileState === "error" ? loadError : "It may have been removed or the link may be incorrect."}</p><Link className="button button-dark" href="/locators">Back to the directory</Link></div> : <article className="profile-page"><Link href="/locators" className="text-link">← Back to locators</Link><div className="profile-page-grid">{profile.image ? <><img className="profile-page-photo" src={profile.image} alt={profile.name || "Locator profile"} onError={(e) => { e.currentTarget.hidden = true; e.currentTarget.nextElementSibling.hidden = false; }}/><div className="profile-page-photo photo-unknown" role="img" aria-label="Photo unavailable" hidden>Photo unavailable</div></> : <div className="profile-page-photo photo-unknown">Photo unknown</div>}<div><div className="eyebrow">HOUSTON APARTMENT LOCATOR</div><h1>{profile.name || "Name unknown"}</h1><p className="company-name">{profile.company || "Company unknown"}</p><p>{profile.about || "About information unknown."}</p><p><strong>Main area:</strong> {profile.area || "Unknown"}</p><p><strong>Areas served:</strong> {profile.serviceAreas?.length ? profile.serviceAreas.join(", ") : "Unknown"}</p><p><strong>Specialties:</strong> {profile.tags?.length ? profile.tags.join(", ") : "Unknown"}</p><p><strong>Languages:</strong> {profile.languages?.length ? profile.languages.join(", ") : "Unknown"}</p><p><strong>Contact:</strong> {profile.contactEmail || profile.contactPhone ? <>{profile.contactEmail && <a href={`mailto:${profile.contactEmail}`}>{profile.contactEmail}</a>}{profile.contactEmail && profile.contactPhone ? " · " : ""}{profile.contactPhone && <a href={`tel:${profile.contactPhone}`}>{profile.contactPhone}</a>}</> : "Unknown"}</p><p><strong>Source:</strong> {profile.source || "Unknown"}</p><p><strong>Last updated:</strong> {formatDate(profile.lastUpdated)}</p>{profile.listingsUrl ? <a className="button button-dark" href={profile.listingsUrl} target="_blank" rel="noopener noreferrer">View their listings <ExternalLink size={15}/></a> : <p>Listings link: Unknown</p>}<ReportForm id={profile.id}/></div></div></article>}</main></Shell>;
-  if (route === "/") return <Shell {...shellProps}><main><section className="hero" aria-labelledby="hero-title"><div className="hero-image"/><div className="hero-overlay"/><div className="hero-content page-shell"><div className="hero-copy"><div className="eyebrow eyebrow-light">HOUSTON’S APARTMENT LOCATOR DIRECTORY</div><h1 id="hero-title">Find apartment locators.<br/><em>Know where to start.</em></h1><p>Search local expertise by neighborhood, city, ZIP code or specialty, then go straight to a locator’s own listings.</p></div></div></section><section className="search-wrap page-shell" aria-label="Find a locator"><SearchForm/></section><section className="trust-band"><div className="page-shell trust-inner"><div className="trust-points"><div><ShieldCheck/><span><strong>People, not properties</strong><small>Find a locator, then visit their listings</small></span></div><div><MapPin/><span><strong>Houston local knowledge</strong><small>Search neighborhoods and ZIP codes</small></span></div><div><Bookmark/><span><strong>Save your favourites</strong><small>Keep profiles in your account</small></span></div></div></div></section><section className="directory page-shell"><div className="section-heading"><div className="eyebrow">MEET LOCAL LOCATORS</div><h2>Start with people who know <em>Houston.</em></h2></div>{loadState === "error" ? <p className="empty-state" role="alert">Directory unavailable. {loadError}</p> : locators.length ? <div className="locator-grid">{[...locators.filter((l) => l.featured), ...locators.filter((l) => !l.featured)].slice(0, 3).map((l) => <LocatorCard key={l.id} locator={l} saved={saved.some((x) => x.id === l.id)} onSave={toggleSave}/>)}</div> : <p className="empty-state">{loadState === "loading" ? "Loading locators…" : "No locators are available yet."}</p>}<p><Link className="button button-dark" href="/locators">Browse all locators <ArrowRight size={15}/></Link></p><div className="home-links"><Link href="/how-it-works">How FindIt works</Link><Link href="/for-locators">For locators and property teams</Link><Link href="/pricing">Early pricing</Link><Link href="/contact">Contact us</Link></div></section></main></Shell>;
-  if (route === "/locators") return <Shell {...shellProps}><main className="directory page-shell route-page"><div className="section-heading"><div><div className="eyebrow">MEET YOUR LOCAL EXPERTS</div><h1>Houston apartment locator directory</h1></div></div><SearchForm initial={q} initialSpecialty={specialty}/><label className="sort-control"><span>Sort by</span><select id="sort" onChange={(e) => { const s = e.target.value; const p = new URLSearchParams(window.location.search); s ? p.set("sort", s) : p.delete("sort"); go(`/locators?${p}`); }} value={params.get("sort") || "name"}><option value="name">Name</option><option value="experience">Most experienced</option></select></label>{loadState === "loading" ? <p role="status">Loading locators…</p> : loadState === "error" ? <div className="empty-state" role="alert"><h2>Directory unavailable</h2><p>{loadError}</p><button className="button" onClick={() => window.location.reload()}>Try again</button></div> : visible.length ? <div className="locator-grid">{(params.get("sort") === "experience" ? [...visible].sort((a,b) => (b.years || -1) - (a.years || -1)) : [...visible].sort((a,b) => a.name.localeCompare(b.name))).map((l) => <LocatorCard key={l.id} locator={l} saved={saved.some((x) => x.id === l.id)} onSave={toggleSave}/>)}</div> : <div className="empty-state"><h2>No locators found</h2><p>Try a different neighborhood, ZIP code or specialty.</p><Link className="button button-dark" href="/locators">Clear search</Link></div>}</main></Shell>;
-  if (route === "/staff" && user?.role !== "staff") return <Shell {...shellProps}><main className="page-shell route-page empty-state"><h1>Staff only</h1><p>This area is for FindIt staff.</p><Link className="button button-dark" href="/">Return home</Link></main></Shell>;
-  const pages = {
-    "/how-it-works": ["How FindIt works", "Search Houston locators by neighborhood, city, ZIP code or specialty. Read their profiles, compare the areas and languages they list, then follow the link to their own listings page. Create a free member account to save profiles."],
-    "/for-locators": ["For locators and property teams", "FindIt helps Houston renters discover apartment locators and realtors. Locator self-service profiles are not available yet. Property owners and managers can contact our team to discuss directory information and partnerships.", "Contact about FindIt", "/contact"],
-    "/pricing": ["Early pricing", "Browsing locator profiles and saving favourites is free for renters. FindIt is preparing directory options for professional locators and property teams. No payments or memberships are available in this beta.", "Ask about listing information", "/contact"],
-    "/contact": ["Contact FindIt", "Need account help, have a question about the directory, or want to discuss locator and property team information? Send our team a message. For profile corrections, you can also use Report a problem on that locator’s profile."],
-    "/privacy": ["Privacy", "FindIt stores account details needed to provide sign-in and saved locators. Passwords are stored as secure hashes. Verification, reset and session tokens are stored as hashes. Reports may include the account email for signed-in users. Contact us with questions or requests."],
-    "/terms": ["Terms", "FindIt is a directory of apartment locators and realtors, not a property listings service. Profile information is provided for discovery and may be incomplete or outdated. Verify details directly with the locator. Listings links open third-party sites. Report inaccurate information so our staff can review it."],
-  };
-  if (pages[route]) { const [title, body, cta, href] = pages[route]; return <Shell {...shellProps}><main className="page-shell route-page info-page"><div className="eyebrow">FINDIT HTX</div><h1>{title}</h1><p>{body}</p>{cta && <Link className="button button-dark" href={href}>{cta} <ArrowRight size={15}/></Link>}{route === "/how-it-works" && <p><Link className="button button-dark" href="/locators">Find locators <ArrowRight size={15}/></Link></p>}{route === "/contact" && <ContactPage/>}</main></Shell>; }
-  return <Shell {...shellProps}><main className="page-shell route-page empty-state"><h1>We couldn’t find that page</h1><p>Check the address or return to the FindIt directory.</p><Link className="button button-dark" href="/">Go to FindIt home</Link></main></Shell>;
+  const [route, setRoute] = useState(pathNow());
+  const [search, setSearch] = useState(window.location.search);
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [saved, setSaved] = useState(EMPTY_SAVED);
+  const [savedError, setSavedError] = useState("");
+
+  useEffect(() => {
+    const pop = () => { setRoute(pathNow()); setSearch(window.location.search); };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, []);
+  useEffect(() => { api.me().then((r) => setUser(r.user)).catch(() => setUser(null)).finally(() => setAuthReady(true)); }, []);
+  useEffect(() => {
+    if (!user) { setSaved(EMPTY_SAVED); setSavedError(""); return; }
+    setSavedError("");
+    api.favourites().then((r) => setSaved({ locators: r.locators || [], properties: r.properties || [] })).catch((e) => setSavedError(e.message));
+  }, [user]);
+
+  // Optimistic save/unsave with rollback if the request fails.
+  const toggleSave = useCallback(async (kind, item) => {
+    if (!user) { go(`/signin?next=${encodeURIComponent(window.location.pathname + window.location.search)}`); return; }
+    const found = saved[kind].some((x) => x.id === item.id);
+    const apply = (remove) => setSaved((s) => ({ ...s, [kind]: remove ? s[kind].filter((x) => x.id !== item.id) : [item, ...s[kind].filter((x) => x.id !== item.id)] }));
+    apply(found);
+    try { await (found ? api.unsave(kind, item.id) : api.save(kind, item.id)); }
+    catch (e) { apply(!found); if (e.status === 401) setUser(null); }
+  }, [user, saved]);
+  const isSaved = (kind) => (id) => saved[kind].some((x) => x.id === id);
+  const saveProperty = (p) => toggleSave("properties", p);
+  const saveLocator = (l) => toggleSave("locators", l);
+  const signOut = async () => { try { await api.logout(); } catch { /* already signed out */ } setUser(null); go("/"); };
+
+  const params = new URLSearchParams(search);
+  const privateRoute = route === "/account" || route === "/staff";
+  useEffect(() => { if (authReady && privateRoute && !user) go(`/signin?next=${encodeURIComponent(route)}`, { replace: true }); }, [route, authReady, user, privateRoute]);
+  if (privateRoute && !authReady) return <main className="page-shell route-page"><p role="status">Checking your account…</p></main>;
+  if (privateRoute && !user) return null;
+
+  const legacyAuth = route === "/" && (params.has("verify") || params.has("reset"));
+  if (AUTH_ROUTES[route] || legacyAuth) {
+    const mode = AUTH_ROUTES[route] || (params.has("reset") ? "reset" : "verify");
+    const token = params.get("token") || params.get("reset") || params.get("verify");
+    const next = params.get("next");
+    const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : null;
+    return <AuthScreen key={`${mode}-${token || ""}`} mode={mode} token={token}
+      onMode={(m) => go(m === "forgot" ? "/forgot-password" : `/${m}${safeNext ? `?next=${encodeURIComponent(safeNext)}` : ""}`)}
+      onHome={() => go("/")}
+      onSignedIn={(u) => { setUser(u); go(safeNext || (u.role === "staff" ? "/staff" : "/account")); }} />;
+  }
+  if (route === "/account") return <MemberAccount user={user} saved={saved} savedError={savedError}
+    onUnsave={(kind, item) => toggleSave(kind, item)} onOpen={go} onHome={() => go("/")} onSignOut={signOut} />;
+  if (route === "/staff" && user.role === "staff") return <StaffConsole user={user} onHome={() => go("/")} onSignOut={signOut} />;
+
+  const shell = (page) => <Shell user={user} count={saved.locators.length + saved.properties.length} signOut={signOut} route={route}>{page}</Shell>;
+  const propertyMatch = route.match(/^\/apartments\/([^/]+)\/?$/);
+  const locatorMatch = route.match(/^\/locators\/([^/]+)\/?$/);
+
+  if (route === "/staff") return shell(<StaffOnly />);
+  if (route === "/") return shell(<HomePage isSaved={isSaved("properties")} onSave={saveProperty} isLocatorSaved={isSaved("locators")} onSaveLocator={saveLocator} />);
+  if (route === "/apartments" || route === "/apartments/") return shell(<ApartmentsPage search={search} isSaved={isSaved("properties")} onSave={saveProperty} />);
+  if (propertyMatch) return shell(<PropertyPage id={decodeURIComponent(propertyMatch[1])} isSaved={isSaved("properties")} onSave={saveProperty} />);
+  if (route === "/locators" || route === "/locators/") return shell(<LocatorsPage search={search} isSaved={isSaved("locators")} onSave={saveLocator} />);
+  if (locatorMatch) return shell(<LocatorProfilePage id={decodeURIComponent(locatorMatch[1])} isSaved={isSaved("locators")} onSave={saveLocator} isPropertySaved={isSaved("properties")} onSaveProperty={saveProperty} />);
+  if (route === "/contact") return shell(<ContactPage search={search} />);
+  const Info = INFO_PAGES[route];
+  if (Info) return shell(<Info />);
+  return shell(<NotFoundPage />);
 }
 
-createRoot(document.getElementById("root")).render(<App/>);
+function StaffOnly() {
+  usePageTitle("Staff only");
+  return <main className="page-shell route-page empty-state"><h1>Staff only</h1><p>This area is for FindIt staff.</p><Link className="button button-dark" href="/">Return home</Link></main>;
+}
+
+// Reuse the root if this module is re-run (e.g. by hot reload in development).
+const container = document.getElementById("root");
+container.__finditRoot ??= createRoot(container);
+container.__finditRoot.render(<App />);

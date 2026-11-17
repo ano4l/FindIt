@@ -17,10 +17,11 @@ export const newToken = () => randomBytes(32).toString("base64url");
 export const hashToken = (t) => createHash("sha256").update(String(t)).digest("hex");
 
 // Small in-memory limiter. Fine for one server process; use a shared store if you scale out.
-export function rateLimit({ windowMs, max }) {
+// `name` groups routes into one bucket (e.g. every report endpoint shares "report").
+export function rateLimit({ name, windowMs, max }) {
   const hits = new Map();
   return (req, res, next) => {
-    const key = `${req.ip}:${req.path}`;
+    const key = `${req.ip}:${name || req.path}`;
     const now = Date.now();
     const recent = (hits.get(key) || []).filter((t) => now - t < windowMs);
     if (recent.length >= max) {
