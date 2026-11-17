@@ -1,0 +1,221 @@
+[
+  {
+    "id": "alexis-ramirez",
+    "name": "Alexis Ramirez",
+    "zipCodes": [
+      "77002",
+      "77007",
+      "77019"
+    ],
+    "serviceAreas": [
+      "The Heights",
+      "Midtown",
+      "Galleria"
+    ],
+    "company": "Houston Home Finders",
+    "rating": "5.0",
+    "reviews": 98,
+    "area": "Houston, TX",
+    "radius": "15 mi",
+    "years": 8,
+    "response": "Usually replies in 1 hour",
+    "tags": [
+      "Luxury",
+      "High-rises",
+      "Relocation"
+    ],
+    "about": "Helping you find the perfect home at no cost. I specialize in luxury high-rises and new construction across Houston.",
+    "image": "/assets/portraits/alexis-ramirez.webp",
+    "listingsUrl": "https://www.har.com/apartments?agent=alexis-ramirez",
+    "lastUpdated": "Nov 2026",
+    "source": "Sample data",
+    "verified": false,
+    "featured": true,
+    "languages": [
+      "English",
+      "Spanish"
+    ],
+    "fastResponse": true
+  },
+  {
+    "id": "marcus-lee",
+    "name": "Marcus Lee",
+    "zipCodes": [
+      "77002",
+      "77006",
+      "77019"
+    ],
+    "serviceAreas": [
+      "Downtown",
+      "Midtown",
+      "Galleria"
+    ],
+    "company": "The Apartment Guys",
+    "rating": "4.9",
+    "reviews": 127,
+    "area": "Houston, TX",
+    "radius": "25 mi",
+    "years": 11,
+    "response": "Usually replies in 2 hours",
+    "tags": [
+      "Mid-range",
+      "Pet friendly",
+      "Corporate"
+    ],
+    "about": "I make apartment hunting simple. Access to exclusive specials and personalized service, always free for you.",
+    "image": "/assets/portraits/marcus-lee.webp",
+    "listingsUrl": "https://www.har.com/apartments?agent=marcus-lee",
+    "lastUpdated": "Nov 2026",
+    "source": "Sample data",
+    "verified": false,
+    "languages": [
+      "English"
+    ],
+    "fastResponse": false
+  },
+  {
+    "id": "brianna-taylor",
+    "name": "Brianna Taylor",
+    "zipCodes": [
+      "77380",
+      "77381",
+      "77389"
+    ],
+    "serviceAreas": [
+      "The Woodlands",
+      "Spring",
+      "Katy"
+    ],
+    "company": "Key2HTX",
+    "rating": "5.0",
+    "reviews": 86,
+    "area": "Houston, TX",
+    "radius": "20 mi",
+    "years": 6,
+    "response": "Usually replies in 30 minutes",
+    "tags": [
+      "First-time renters",
+      "Student housing",
+      "Relocation"
+    ],
+    "about": "I am passionate about helping you find a place that fits your lifestyle and budget. Local expertise. Real relationships.",
+    "image": "/assets/portraits/brianna-taylor.webp",
+    "listingsUrl": "https://www.har.com/apartments?agent=brianna-taylor",
+    "lastUpdated": "Nov 2026",
+    "source": "Sample data",
+    "verified": false,
+    "languages": [
+      "English",
+      "Spanish"
+    ],
+    "fastResponse": true
+  },
+  {
+    "id": "kyle-anderson",
+    "name": "Kyle Anderson",
+    "zipCodes": [
+      "77056",
+      "77057",
+      "77494"
+    ],
+    "serviceAreas": [
+      "Galleria",
+      "Katy",
+      "Sugar Land"
+    ],
+    "company": "HTX Apartment Advisors",
+    "rating": "4.8",
+    "reviews": 73,
+    "area": "Houston, TX",
+    "radius": "30 mi",
+    "years": 9,
+    "response": "Usually replies in 3 hours",
+    "tags": [
+      "Luxury",
+      "New construction",
+      "Relocation"
+    ],
+    "about": "From downtown to the suburbs, I will help you find the right fit and negotiate the best deal, at no cost to you.",
+    "image": "/assets/portraits/kyle-anderson.webp",
+    "listingsUrl": "https://www.har.com/apartments?agent=kyle-anderson",
+    "lastUpdated": "Nov 2026",
+    "source": "Sample data",
+    "verified": false,
+    "languages": [
+      "English"
+    ],
+    "fastResponse": false
+  },
+  {
+    "id": "sarah-mitchell",
+    "name": "Sarah Mitchell",
+    "zipCodes": [
+      "77380",
+      "77389",
+      "77373"
+    ],
+    "serviceAreas": [
+      "The Woodlands",
+      "Spring",
+      "Katy"
+    ],
+    "company": "Houston Living Co.",
+    "rating": "4.9",
+    "reviews": 64,
+    "area": "The Woodlands, TX",
+    "radius": "22 mi",
+    "years": 7,
+    "response": "Usually replies in 1 hour",
+    "tags": [
+      "Families",
+      "Relocation",
+      "Short-term"
+    ],
+    "about": "I help families settle into Houston neighborhoods with thoughtful recommendations and a personal touch.",
+    "image": "/assets/portraits/sarah-mitchell.webp",
+    "listingsUrl": "https://www.har.com/apartments?agent=sarah-mitchell",
+    "lastUpdated": "Nov 2026",
+    "source": "Sample data",
+    "verified": false,
+    "languages": [
+      "English"
+    ],
+    "fastResponse": true
+  },
+  {
+    "id": "jamal-carter",
+    "name": "Jamal Carter",
+    "zipCodes": [
+      "77478",
+      "77584",
+      "77030"
+    ],
+    "serviceAreas": [
+      "Sugar Land",
+      "Pearland",
+      "Medical Center"
+    ],
+    "company": "Carter Apartment Search",
+    "rating": "4.9",
+    "reviews": 52,
+    "area": "Sugar Land, TX",
+    "radius": "18 mi",
+    "years": 5,
+    "response": "Usually replies in 2 hours",
+    "tags": [
+      "Corporate",
+      "Medical professionals",
+      "Pet friendly"
+    ],
+    "about": "A straightforward search for your next place, with neighborhood knowledge from someone who calls Houston home.",
+    "image": "/assets/portraits/jamal-carter.webp",
+    "listingsUrl": "https://www.har.com/apartments?agent=jamal-carter",
+    "lastUpdated": "Nov 2026",
+    "source": "Sample data",
+    "verified": false,
+    "languages": [
+      "English"
+    ],
+    "fastResponse": false
+  }
+]

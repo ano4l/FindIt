@@ -1,44 +1,53 @@
 # Findit HTX
 
-Responsive public marketplace preview for connecting Houston renters with apartment locators. The app uses the supplied design references and the repository venture documents' navy and teal palette, professional membership model, and trust-first product language.
+Directory that helps Houston renters find apartment locators and realtors, then sends them to the locator's own listings. This is the Milestone 1 beta: a React front end plus a Node/SQLite API. The app uses the supplied design references and the repository venture documents' navy and teal palette, professional membership model, and trust-first product language.
 
 ## Run locally
 
-Requires Node.js 20.19+ (or 22.12+) and pnpm.
+Requires Node.js 22.12+ and pnpm.
 
 ```sh
 pnpm install
-pnpm dev
+pnpm dev:server     # API on http://localhost:3001 (creates the database and loads sample profiles)
+pnpm dev            # React app on http://localhost:5173 (proxies /api to the API)
 ```
 
-Create a production bundle with:
+Create the first staff account (staff see the Staff console after signing in):
 
 ```sh
-pnpm build
-pnpm preview
+pnpm staff you@example.com 'a-long-password' "Your Name"
 ```
 
-## Deploy to Vercel
+With no `SMTP_URL`, verification and password-reset emails are printed in the API console and listed at `/api/dev/outbox` (development only). Copy the link from there.
 
-This repository is configured as a static Vite site for Vercel. Import `ano4l/FindIt` from the Vercel dashboard and use the repository root as the project root. Vercel will use the project configuration to run `pnpm build`, publish `dist`, and serve the app entry point for direct SPA paths. The `pnpm-lock.yaml` file lets Vercel detect the package manager automatically.
+Run the tests: `pnpm test`.
 
-The only optional environment variable is `VITE_ANNUAL_MEMBERSHIP_PRICE`, used to change the illustrative price shown in the demo. Set it in Vercel Project Settings under Environment Variables for the environments you need, then redeploy. `VITE_` variables are included in browser code, so never put private credentials in them. No other environment variables or service credentials are required for this static preview.
+## What Milestone 1 includes
 
-Pushing to the connected `main` branch creates a production deployment; branches and pull requests can create preview deployments. This prepares the frontend for hosting only. It does not add backend authentication, protected admin access, a database, messaging, billing, or AI services.
+- Public pages and the locator directory, responsive on mobile.
+- Locator/realtor profiles with a **View their listings** link out to the locator's own page (HAR or their site), source and last-updated labels, and clear empty/error states.
+- Accounts: sign up, email confirmation, sign in/out, forgot/reset password. Roles: visitor, member, staff. Accounts carry a `plan` column ready for Milestone 2 subscriptions (nothing reads it yet).
+- Search by name, neighborhood, city or ZIP; filter by specialty and quick filters; sort.
+- Members can save favourite locators (stored on their account).
+- Visitors can report a problem with a profile.
+- Staff console: add, edit, publish, hide and remove profiles; review and resolve reports; see source and last-updated on every record.
+- Security basics: scrypt password hashes, hashed session/reset tokens, httpOnly cookies, login and form rate limits, same-origin request check on writes, security headers, staff-only routes.
+- Backups: `pnpm backup` writes a consistent copy of the database (schedule it nightly).
 
-## What's included
+## Deploying (testing site)
 
-- Responsive public landing page and locator directory.
-- Search by name, Houston neighborhood, service area, specialty, or sample ZIP code.
-- Specialty and quick filters, sort options, and sample profile details.
-- Locally generated skyline and portrait assets.
-- Interactive demo sign-in and sign-up with locator and apartment-community portal views.
-- Shared admin demo console with sample locator/community records, filters, a review queue, and temporary moderation controls.
-- Local-only session and sample changes held in React state; everything resets when the app reloads.
-- An illustrative annual membership price configurable with `VITE_ANNUAL_MEMBERSHIP_PRICE`.
+The API needs a Node host with a **persistent disk** (the database is a SQLite file), for example Render, Railway or Fly.io. Vercel's static hosting alone cannot run it.
 
-All locator names, portraits, ratings, reviews, response times, and profile details are fictional preview data. The sign-in and sign-up forms accept browser-validated demo inputs, but do not send or store credentials. The portal session contains only an in-memory display name and selected role. Admin actions only change fictional fixture data in the current page session. These flows do not provide real authentication, authorization, account security, or protected admin access; all session and moderation state resets on reload. Save actions are also held in page state only. No account, message, payment, verification, database, or billing operation is live. The `$199/year` display is an example from the design reference and is not confirmed commercial pricing.
+```sh
+pnpm install && pnpm build
+NODE_ENV=production pnpm start      # serves the API and the built site on $PORT
+```
 
-## Next product phase
+Set the variables in `.env.example` (at minimum `PUBLIC_URL`, `FINDIT_DB` on the persistent disk, `SMTP_URL` so real emails go out, and `CONTACT_EMAIL` so the contact form has a recipient). Schedule `pnpm backup` and copy the backups off the server. If the API is unavailable, directory pages show a retryable error state.
 
-The portal and admin console are visual interaction demos. This checkout does not yet include backend authentication, role security, persistent profile editing, messaging, Stripe subscriptions and webhooks, the AI assistant, protected admin tools, or a live locator verification workflow. Connect and validate those services before presenting them as available. Keep rental inventory and availability search out of the MVP unless the product scope changes.
+## Known limits and next steps
+
+- Profile photos are links (https or site path); there is no upload storage yet.
+- Rate limiting is in memory, which is fine for one server process.
+- Sample profiles (including ratings and reviews) are fictional and labeled "Sample data". Replace them with real, approved locator profiles before demonstrating to the public; staff can hide or remove samples from the console.
+- Messaging, payments, memberships, alerts, self-service locator accounts and AI assistance are Milestone 2.

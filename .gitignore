@@ -4,3 +4,7 @@ dist/
 .env.*
 !.env.example
 tmp/
+
+server/data/
+server/backups/
+.env
