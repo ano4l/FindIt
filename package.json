@@ -6,16 +6,24 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "server": "node server/index.js",
+    "dev:server": "node --watch server/index.js",
+    "start": "NODE_ENV=production node server/index.js",
+    "staff": "node server/create-staff.js",
+    "backup": "node server/backup.js",
+    "test": "node --test --test-force-exit server/api.test.js"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
     "@fontsource/dm-sans": "latest",
     "@fontsource/manrope": "latest",
-    "vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "express": "^5.3.0",
+    "lucide-react": "latest",
+    "nodemailer": "^10.6.0",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest"
+    "vite": "latest"
   },
   "devDependencies": {}
 }
