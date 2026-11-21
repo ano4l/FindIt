@@ -3,11 +3,12 @@ import { AlertTriangle, ArrowDown, ArrowUp, Check, ExternalLink, LogOut, Plus, T
 import { AMENITIES, AVAILABILITY, PETS, isStale, money } from "../shared/catalog.js";
 import { api, formatDate, daysAgo } from "./api.js";
 import { Brand } from "./account.jsx";
+import { Link } from "./ui.jsx";
 import "./workspace.css";
 import "./account.css";
 
 const TABS = ["Listings", "Locators", "Reports", "Activity"];
-const ACTION_LABEL = { created: "Created", edited: "Edited", published: "Published", hid: "Hid", removed: "Removed", availability: "Updated availability", uploaded: "Uploaded", resolved: "Resolved", dismissed: "Dismissed", reopened: "Reopened" };
+const ACTION_LABEL = { created: "Created", edited: "Edited", published: "Published", hid: "Hid", removed: "Removed", availability: "Updated availability", uploaded: "Uploaded", resolved: "Resolved", dismissed: "Dismissed", reopened: "Reopened", admin: "Became admin" };
 
 export function StaffConsole({ user, onHome, onSignOut }) {
   const [tab, setTab] = useState("Listings");
@@ -32,7 +33,7 @@ export function StaffConsole({ user, onHome, onSignOut }) {
     <main className="staff-page">
       <header className="workspace-header">
         <Brand onHome={onHome} />
-        <div className="staff-head-right"><span>{user.email}</span><button className="workspace-back" onClick={onSignOut}><LogOut size={15} /> Sign out</button></div>
+        <div className="staff-head-right"><span>{user.email}</span><Link className="workspace-back" href="/account">My account</Link><button className="workspace-back" onClick={onSignOut}><LogOut size={15} /> Sign out</button></div>
       </header>
       <section className="staff-main">
         <h1>Staff console</h1>
@@ -64,6 +65,11 @@ export function StaffConsole({ user, onHome, onSignOut }) {
   );
 }
 
+// Shown when a list can't be loaded, instead of leaving "Loading…" on screen forever.
+function LoadFailed({ what, onRetry }) {
+  return <p className="account-empty" role="alert">We couldn’t load {what}. <button type="button" className="link-button" onClick={onRetry}>Try again</button></p>;
+}
+
 /* ------------------------------------------------------------ Listings */
 const staleDays = (p) => (p.availabilityCheckedAt ? Math.floor((Date.now() - new Date(p.availabilityCheckedAt).getTime()) / 86400000) : null);
 const needsAttention = (p) => isStale(p.availabilityCheckedAt) || !p.photos.length || !p.summary.rent || !p.floorPlans.length;
@@ -73,11 +79,12 @@ function ListingsTab({ run, setError }) {
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState(null); // null | "new" | id
-  const load = () => api.admin.properties().then((r) => setRows(r.properties)).catch((e) => setError(e.message));
+  const [failed, setFailed] = useState(false);
+  const load = () => { setFailed(false); return api.admin.properties().then((r) => setRows(r.properties)).catch((e) => { setFailed(true); setError(e.message); }); };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (editing) return <PropertyEditor id={editing === "new" ? null : editing} run={run} onDone={() => { setEditing(null); load(); }} />;
-  if (!rows) return <p role="status">Loading listings…</p>;
+  if (!rows) return failed ? <LoadFailed what="the listings" onRetry={() => { setError(""); load(); }} /> : <p role="status">Loading listings…</p>;
   const needle = q.trim().toLowerCase();
   const shown = rows.filter((r) => (filter === "all" || (filter === "attention" ? r.status === "published" && needsAttention(r) : r.status === filter))
     && (!needle || `${r.name} ${r.neighborhood} ${r.zip} ${r.address}`.toLowerCase().includes(needle)));
@@ -130,7 +137,7 @@ function ListingsTab({ run, setError }) {
                       <button onClick={() => act(() => api.admin.setAvailability(r.id, r.availability), `${r.name}: availability confirmed.`)} title="Record that you've checked availability today">Mark checked</button>
                       {r.status === "published"
                         ? <><a className="row-link" href={`/apartments/${encodeURIComponent(r.id)}`} target="_blank" rel="noopener noreferrer">View <ExternalLink size={11} /></a><button onClick={() => act(() => api.admin.setPropertyStatus(r.id, "hidden"), "Listing hidden.")}>Hide</button></>
-                        : <button onClick={() => act(() => api.admin.setPropertyStatus(r.id, "published"), "Listing published.")}>Publish</button>}
+                        : <><a className="row-link" href={`/apartments/${encodeURIComponent(r.id)}`} target="_blank" rel="noopener noreferrer">Preview <ExternalLink size={11} /></a><button onClick={() => act(() => api.admin.setPropertyStatus(r.id, "published"), "Listing published.")}>Publish</button></>}
                       <button className="danger" onClick={() => window.confirm(`Remove ${r.name}? It will disappear from search and this list.`) && act(() => api.admin.setPropertyStatus(r.id, "removed"), "Listing removed.")}>Remove</button>
                     </td>
                   </tr>
@@ -144,12 +151,37 @@ function ListingsTab({ run, setError }) {
   );
 }
 
+// Resizes to at most 2,000 px and re-encodes as JPEG, so uploads stay under the server's 4 MB limit
+// (Vercel caps request bodies at 4.5 MB) and location metadata embedded by phones is dropped.
+async function preparePhoto(file) {
+  if (!file.type.startsWith("image/")) throw new Error("choose an image file.");
+  if (file.size > 30 * 1024 * 1024) throw new Error("the original is larger than 30 MB.");
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); }
+  catch { throw new Error("this image format can't be read in this browser. Use a JPEG, PNG or WebP."); }
+  const scale = Math.min(1, 2000 / Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h); // transparent PNGs get a white background
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  for (const quality of [0.85, 0.7, 0.55]) {
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (blob && blob.size <= 3.8 * 1024 * 1024) return new File([blob], `${file.name.replace(/\.[^.]+$/, "")}.jpg`, { type: "image/jpeg" });
+  }
+  throw new Error("the photo is still too large after resizing.");
+}
+
 const EMPTY_PLAN = { name: "", beds: "1", baths: "1", sqft: "", rentMin: "", rentMax: "", availableFrom: "", units: "" };
 const EMPTY_PROPERTY = {
   name: "", address: "", neighborhood: "", city: "Houston", zip: "", description: "", floorPlans: [{ ...EMPTY_PLAN }], amenities: [], photos: [],
   parking: "", pets: "unknown", petDetails: "", incentives: "", leaseTerms: "", contactName: "", contactPhone: "", contactEmail: "",
   websiteUrl: "", tourUrl: "", locatorId: "", availability: "unknown", availabilityNote: "", source: "", featured: false,
 };
+const untouchedPlan = (p) => p.beds === EMPTY_PLAN.beds && p.baths === EMPTY_PLAN.baths
+  && ["name", "sqft", "rentMin", "rentMax", "availableFrom", "units"].every((k) => !String(p[k] ?? "").trim());
 const str = (v) => (v == null ? "" : String(v));
 const toForm = (p) => ({ ...EMPTY_PROPERTY, ...p, floorPlans: p.floorPlans.map((x) => Object.fromEntries(Object.entries({ ...EMPTY_PLAN, ...x }).map(([k, v]) => [k, str(v)]))) });
 
@@ -161,6 +193,7 @@ function PropertyEditor({ id, run, onDone }) {
   const [uploading, setUploading] = useState(false);
   const [photoUrl, setPhotoUrl] = useState("");
   const [localError, setLocalError] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [confirmAvailability, setConfirmAvailability] = useState(false);
   const publishRef = useRef(false);
   useEffect(() => {
@@ -179,9 +212,7 @@ function PropertyEditor({ id, run, onDone }) {
     const urls = [];
     for (const file of files) {
       if (form.photos.length + urls.length >= 12) { setLocalError("A listing can have up to 12 photos."); break; }
-      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setLocalError(`${file.name}: use a JPEG, PNG or WebP image.`); continue; }
-      if (file.size > 5 * 1024 * 1024) { setLocalError(`${file.name} is larger than 5 MB.`); continue; }
-      try { urls.push((await api.admin.upload(file)).url); } catch (e) { setLocalError(`${file.name}: ${e.message}`); }
+      try { urls.push((await api.admin.upload(await preparePhoto(file))).url); } catch (e) { setLocalError(`${file.name}: ${e.message}`); }
     }
     setForm((f) => ({ ...f, photos: [...f.photos, ...urls] }));
     setUploading(false);
@@ -189,13 +220,27 @@ function PropertyEditor({ id, run, onDone }) {
 
   async function save(e) {
     e.preventDefault();
-    setLocalError(""); setBusy(true);
-    const body = { ...form, confirmAvailability };
-    const ok = await run(() => (id ? api.admin.updateProperty(id, body) : api.admin.createProperty({ ...body, publish: publishRef.current })),
-      id ? "Listing saved." : publishRef.current ? "Listing published." : "Listing saved as hidden.");
+    setLocalError(""); setSaveError(""); setBusy(true);
+    // The starter row of the floor-plan table is dropped if nothing was typed into it, so a listing never
+    // shows "1 bd · 1 ba" that nobody entered.
+    const body = { ...form, floorPlans: form.floorPlans.filter((p) => !untouchedPlan(p)), confirmAvailability };
+    try {
+      await (id ? api.admin.updateProperty(id, body) : api.admin.createProperty({ ...body, publish: publishRef.current }));
+    } catch (err) {
+      // Shown beside the Save buttons: the form is long, and an error at the top of the page would be off screen.
+      setSaveError(err.message); setBusy(false);
+      return;
+    }
+    await run(async () => true, id ? "Listing saved." : publishRef.current ? "Listing published." : "Listing saved as hidden.");
     setBusy(false);
-    if (ok) onDone();
+    onDone();
   }
+  const addPhotoLink = () => {
+    const url = photoUrl.trim();
+    if (!url.startsWith("https://")) return;
+    if (form.photos.length >= 12) { setLocalError("A listing can have up to 12 photos."); return; }
+    set("photos", [...form.photos, url]); setPhotoUrl("");
+  };
 
   return (
     <form className="staff-form property-form" onSubmit={save}>
@@ -233,8 +278,8 @@ function PropertyEditor({ id, run, onDone }) {
               <select aria-label={`Plan ${i + 1} bedrooms`} value={p.beds} onChange={(e) => setPlan(i, "beds", e.target.value)}>{[0, 1, 2, 3, 4, 5].map((b) => <option key={b} value={b}>{b === 0 ? "Studio" : b}</option>)}</select>
               <input aria-label={`Plan ${i + 1} bathrooms`} type="number" min="0.5" max="10" step="0.5" value={p.baths} onChange={(e) => setPlan(i, "baths", e.target.value)} />
               <input aria-label={`Plan ${i + 1} square feet`} type="number" min="100" max="20000" value={p.sqft} onChange={(e) => setPlan(i, "sqft", e.target.value)} />
-              <input aria-label={`Plan ${i + 1} lowest rent`} type="number" min="100" max="50000" step="5" value={p.rentMin} onChange={(e) => setPlan(i, "rentMin", e.target.value)} placeholder="$" />
-              <input aria-label={`Plan ${i + 1} highest rent`} type="number" min="100" max="50000" step="5" value={p.rentMax} onChange={(e) => setPlan(i, "rentMax", e.target.value)} placeholder="$" />
+              <input aria-label={`Plan ${i + 1} lowest rent`} type="number" min="100" max="50000" step="1" value={p.rentMin} onChange={(e) => setPlan(i, "rentMin", e.target.value)} placeholder="$" />
+              <input aria-label={`Plan ${i + 1} highest rent`} type="number" min="100" max="50000" step="1" value={p.rentMax} onChange={(e) => setPlan(i, "rentMax", e.target.value)} placeholder="$" />
               <input aria-label={`Plan ${i + 1} available from`} type="date" value={p.availableFrom} onChange={(e) => setPlan(i, "availableFrom", e.target.value)} />
               <input aria-label={`Plan ${i + 1} available units`} type="number" min="0" max="2000" value={p.units} onChange={(e) => setPlan(i, "units", e.target.value)} />
               <button type="button" className="icon-button" aria-label={`Remove plan ${i + 1}`} onClick={() => set("floorPlans", form.floorPlans.filter((_, n) => n !== i))}><Trash2 size={15} /></button>
@@ -242,7 +287,7 @@ function PropertyEditor({ id, run, onDone }) {
           ))}
         </div>
         <button type="button" className="button" onClick={() => set("floorPlans", [...form.floorPlans, { ...EMPTY_PLAN }])}><Plus size={14} /> Add floor plan</button>
-        <p className="muted small">Leave rent, size, date or units blank if unknown — renters will see “Not provided”. Units “0” means none available in that plan.</p>
+        <p className="muted small">Leave rent, size, date or units blank if unknown — renters will see “Not provided”, or “Ask the property” for availability. Units “0” means none available in that plan. A row left completely empty isn’t saved.</p>
       </fieldset>
 
       <fieldset><legend>Photos ({form.photos.length}/12)</legend>
@@ -263,13 +308,15 @@ function PropertyEditor({ id, run, onDone }) {
         )}
         <div className="photo-add">
           <label className="button upload-button"><Upload size={14} /> {uploading ? "Uploading…" : "Upload photos"}
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={uploading} onChange={(e) => { upload([...e.target.files]); e.target.value = ""; }} />
+            <input type="file" accept="image/*" multiple disabled={uploading} onChange={(e) => { upload([...e.target.files]); e.target.value = ""; }} />
           </label>
           <span className="muted small">or add a link:</span>
-          <input type="url" placeholder="https://…" value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} aria-label="Photo link" />
-          <button type="button" className="button" disabled={!photoUrl.startsWith("https://")} onClick={() => { set("photos", [...form.photos, photoUrl.trim()]); setPhotoUrl(""); }}>Add link</button>
+          {/* Enter adds the link instead of submitting (and closing) the whole listing form. */}
+          <input type="url" placeholder="https://…" value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} aria-label="Photo link"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addPhotoLink(); } }} />
+          <button type="button" className="button" disabled={!photoUrl.trim().startsWith("https://")} onClick={addPhotoLink}>Add link</button>
         </div>
-        <p className="muted small">Only use photos you have permission to publish. JPEG, PNG or WebP, up to 5 MB each.</p>
+        <p className="muted small">Only use photos you have permission to publish. Photos are resized to 2,000 px and saved as JPEG, which also removes location data from phone photos.</p>
       </fieldset>
 
       <fieldset><legend>Amenities</legend>
@@ -293,13 +340,14 @@ function PropertyEditor({ id, run, onDone }) {
           {input("contactName", "Contact name", { maxLength: 120 })}
           {input("contactPhone", "Phone", { type: "tel", maxLength: 40 })}
           {input("contactEmail", "Email", { type: "email", maxLength: 320 })}
-          {input("websiteUrl", "Website (https)", { type: "url", maxLength: 500 })}
-          {input("tourUrl", "Tour booking link (https)", { type: "url", maxLength: 500 })}
+          {input("websiteUrl", "Website (https)", { type: "url", maxLength: 500, pattern: "https://.+", title: "A link starting with https://", placeholder: "https://…" })}
+          {input("tourUrl", "Tour booking link (https)", { type: "url", maxLength: 500, pattern: "https://.+", title: "A link starting with https://", placeholder: "https://…" })}
         </div>
         <label className="check"><input type="checkbox" checked={!!form.featured} onChange={(e) => set("featured", e.target.checked)} /> Featured (shown first in recommended results)</label>
       </fieldset>
       <datalist id="staff-neighborhoods">{["The Heights", "Montrose", "Midtown", "Downtown", "EaDo", "Museum District", "Galleria", "Rice Village", "Medical Center", "Memorial", "Energy Corridor", "The Woodlands"].map((n) => <option key={n} value={n} />)}</datalist>
 
+      {saveError && <p className="form-error" role="alert">This listing wasn’t saved. {saveError}</p>}
       <div className="form-actions">
         <button type="button" className="button" onClick={onDone}>Cancel</button>
         {id ? <button className="button button-dark" type="submit" disabled={busy || uploading}>{busy ? "Saving…" : "Save changes"}</button> : (
@@ -328,7 +376,8 @@ function LocatorsTab({ run, setError }) {
   const [filter, setFilter] = useState("all");
   const [editing, setEditing] = useState(null); // null | {id?, form}
   const publishRef = useRef(false);
-  const load = () => api.admin.locators().then((r) => setRows(r.locators)).catch((e) => setError(e.message));
+  const [failed, setFailed] = useState(false);
+  const load = () => { setFailed(false); return api.admin.locators().then((r) => setRows(r.locators)).catch((e) => { setFailed(true); setError(e.message); }); };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const act = async (fn, msg) => { if (await run(fn, msg)) load(); };
 
@@ -379,7 +428,7 @@ function LocatorsTab({ run, setError }) {
       </div>
     </form>
   );
-  if (!rows) return <p role="status">Loading profiles…</p>;
+  if (!rows) return failed ? <LoadFailed what="the locator profiles" onRetry={() => { setError(""); load(); }} /> : <p role="status">Loading profiles…</p>;
   const shown = rows.filter((r) => filter === "all" || r.status === filter);
   return (
     <>
@@ -421,7 +470,8 @@ function LocatorsTab({ run, setError }) {
 function ReportsTab({ run, setError }) {
   const [status, setStatus] = useState("open");
   const [reports, setReports] = useState(null);
-  const load = () => api.admin.reports(status).then((r) => setReports(r.reports)).catch((e) => setError(e.message));
+  const [failed, setFailed] = useState(false);
+  const load = () => { setFailed(false); return api.admin.reports(status).then((r) => setReports(r.reports)).catch((e) => { setFailed(true); setError(e.message); }); };
   useEffect(() => { setReports(null); load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   const act = async (fn, msg) => { if (await run(fn, msg)) load(); };
   return (
@@ -429,7 +479,7 @@ function ReportsTab({ run, setError }) {
       <div className="staff-toolbar">
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Report status"><option value="open">Open</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select>
       </div>
-      {!reports ? <p role="status">Loading reports…</p> : reports.length === 0 ? <p className="account-empty">{status === "open" ? "No open reports. Nice work." : `No ${status} reports.`}</p> : (
+      {!reports ? (failed ? <LoadFailed what="the reports" onRetry={() => { setError(""); load(); }} /> : <p role="status">Loading reports…</p>) : reports.length === 0 ? <p className="account-empty">{status === "open" ? "No open reports. Nice work." : `No ${status} reports.`}</p> : (
         <ul className="report-list">
           {reports.map((r) => {
             const isProperty = r.targetType === "property";
@@ -462,8 +512,10 @@ function ReportsTab({ run, setError }) {
 /* ------------------------------------------------------------ Activity */
 function ActivityTab({ setError }) {
   const [rows, setRows] = useState(null);
-  useEffect(() => { api.admin.activity().then((r) => setRows(r.activity)).catch((e) => setError(e.message)); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!rows) return <p role="status">Loading activity…</p>;
+  const [failed, setFailed] = useState(false);
+  const load = () => { setFailed(false); return api.admin.activity().then((r) => setRows(r.activity)).catch((e) => { setFailed(true); setError(e.message); }); };
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!rows) return failed ? <LoadFailed what="the activity log" onRetry={() => { setError(""); load(); }} /> : <p role="status">Loading activity…</p>;
   if (!rows.length) return <p className="account-empty">No staff activity yet.</p>;
   return (
     <div className="table-wrap">
@@ -474,7 +526,7 @@ function ActivityTab({ setError }) {
             <td>{formatDate(a.at)}<br /><small>{new Date(a.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</small></td>
             <td>{a.by || "Unknown"}</td>
             <td>{ACTION_LABEL[a.action] || a.action}</td>
-            <td><small>{{ property: "Listing", locator: "Locator", report: "Report", photo: "Photo" }[a.targetType] || a.targetType}</small><br />{a.targetName}</td>
+            <td><small>{{ property: "Listing", locator: "Locator", report: "Report", photo: "Photo", account: "Account" }[a.targetType] || a.targetType}</small><br />{a.targetName}</td>
             <td><small>{a.detail}</small></td>
           </tr>
         ))}</tbody>

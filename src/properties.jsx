@@ -4,7 +4,7 @@ import {
   Phone, Ruler, Search, SlidersHorizontal, X, CalendarDays, Globe,
 } from "lucide-react";
 import { AMENITIES, AVAILABILITY, PETS, PROPERTY_REPORT_REASONS, NEIGHBORHOODS, bedsLabel, money } from "../shared/catalog.js";
-import { api, formatDate, formatDay, daysAgo } from "./api.js";
+import { api, formatDate, formatDay, daysAgo, withQuery } from "./api.js";
 import {
   AvailabilityBadge, EmptyState, Link, Photo, ReportForm, SaveButton, go, session, usePageTitle,
   bathsText, bedsText, priceText, sqftText,
@@ -54,7 +54,7 @@ export function HomeSearch() {
       e.preventDefault();
       const p = new URLSearchParams();
       if (q.trim()) p.set("q", q.trim()); if (beds) p.set("beds", beds); if (maxRent) p.set("maxRent", maxRent);
-      go(`/apartments${p.size ? `?${p}` : ""}`);
+      go(withQuery("/apartments", p));
     }}>
       <label className="search-field location-field"><span className="field-label">Neighborhood, city or ZIP</span>
         <span className="input-wrap"><MapPin size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Montrose, Houston or 77008" list="neighborhood-list" /></span>
@@ -130,6 +130,8 @@ export function ApartmentsPage({ search, isSaved, onSave }) {
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const [state, setState] = useState({ status: "loading", items: [], total: 0, page: 1, error: "" });
   const [moreBusy, setMoreBusy] = useState(false);
+  const [moreError, setMoreError] = useState("");
+  const [attempt, setAttempt] = useState(0); // bumped by "Try again" to repeat the same search
   const [filtersOpen, setFiltersOpen] = useState(false);
   const rawQ = params.get("q");
   // "montrose" reads better as "Montrose"; anything the user capitalised is left alone.
@@ -139,24 +141,25 @@ export function ApartmentsPage({ search, isSaved, onSave }) {
   useEffect(() => {
     session.set(LAST_SEARCH, search);
     let live = true;
+    setMoreError("");
     setState((s) => ({ ...s, status: "loading", error: "" }));
     api.properties(Object.fromEntries(params)).then((r) => live && setState({ status: "ready", items: r.properties, total: r.total, page: 1, error: "" }))
       .catch((e) => live && setState({ status: "error", items: [], total: 0, page: 1, error: e.message }));
     return () => { live = false; };
-  }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, attempt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (patch) => {
     const next = new URLSearchParams(search);
     for (const [k, v] of Object.entries(patch)) v ? next.set(k, v) : next.delete(k);
     next.delete("page");
-    go(`/apartments${next.size ? `?${next}` : ""}`, { keepScroll: true });
+    go(withQuery("/apartments", next), { keepScroll: true });
   };
   const loadMore = async () => {
-    setMoreBusy(true);
+    setMoreBusy(true); setMoreError("");
     try {
       const r = await api.properties({ ...Object.fromEntries(params), page: state.page + 1 });
       setState((s) => ({ ...s, items: [...s.items, ...r.properties], page: r.page }));
-    } catch (e) { setState((s) => ({ ...s, error: e.message })); }
+    } catch (e) { setMoreError(e.message); }
     finally { setMoreBusy(false); }
   };
   const chips = FILTER_KEYS.flatMap((k) => {
@@ -194,7 +197,7 @@ export function ApartmentsPage({ search, isSaved, onSave }) {
             </div>
           )}
           {state.status === "error" ? (
-            <EmptyState title="We couldn’t load apartments" action={<button className="button button-dark" onClick={() => go(`/apartments${search}`, { replace: true, keepScroll: true })}>Try again</button>}>{state.error}</EmptyState>
+            <EmptyState title="We couldn’t load apartments" action={<button className="button button-dark" onClick={() => setAttempt((n) => n + 1)}>Try again</button>}>{state.error}</EmptyState>
           ) : state.status === "loading" && !state.items.length ? (
             <div className="prop-grid" aria-hidden="true">{[0, 1, 2].map((i) => <div className="prop-card skeleton" key={i} />)}</div>
           ) : state.items.length === 0 ? (
@@ -207,7 +210,10 @@ export function ApartmentsPage({ search, isSaved, onSave }) {
             <>
               <div className={`prop-grid ${state.status === "loading" ? "is-refreshing" : ""}`}>{state.items.map((p) => <PropertyCard key={p.id} property={p} saved={isSaved(p.id)} onSave={onSave} />)}</div>
               {state.items.length < state.total && (
-                <div className="load-more"><button className="button" onClick={loadMore} disabled={moreBusy}>{moreBusy ? "Loading…" : `Show more (${state.total - state.items.length} more)`}</button></div>
+                <div className="load-more">
+                  {moreError && <p className="form-error" role="alert">We couldn’t load more apartments. {moreError}</p>}
+                  <button className="button" onClick={loadMore} disabled={moreBusy}>{moreBusy ? "Loading…" : moreError ? "Try again" : `Show more (${state.total - state.items.length} more)`}</button>
+                </div>
               )}
               <p className="results-note">Availability and prices come from properties and partners and can change quickly. Each listing shows when it was last checked.</p>
             </>
@@ -223,7 +229,9 @@ function planAvailability(plan, availability) {
   if (plan.units === 0) return "None available";
   if (availability === "unavailable" || availability === "waitlist") return "Not available";
   if (plan.availableFrom && plan.availableFrom > todayIso()) return `From ${formatDay(plan.availableFrom)}`;
-  if (availability === "available") return plan.units ? `Now · ${plan.units} home${plan.units === 1 ? "" : "s"}` : "Now";
+  // "Now" is only claimed for a plan when staff entered a date or a number of homes for that plan.
+  if (availability === "available" && plan.units) return `Now · ${plan.units} home${plan.units === 1 ? "" : "s"}`;
+  if (availability === "available" && plan.availableFrom) return "Now";
   return "Ask the property";
 }
 const planRent = (p) => (p.rentMin == null && p.rentMax == null ? "Not provided" : p.rentMin === p.rentMax || p.rentMax == null ? money(p.rentMin) : p.rentMin == null ? money(p.rentMax) : `${money(p.rentMin)} – ${money(p.rentMax)}`);
@@ -249,15 +257,26 @@ function Gallery({ photos, name }) {
 
 const Fact = ({ icon, label, children }) => <div className="fact">{icon}<div><span>{label}</span><strong>{children}</strong></div></div>;
 
-export function PropertyPage({ id, isSaved, onSave }) {
+export function PropertyPage({ id, isSaved, onSave, user }) {
   const [state, setState] = useState({ status: "loading" });
+  const isStaff = user?.role === "staff";
   useEffect(() => {
     let live = true;
     setState({ status: "loading" });
     api.property(id).then((r) => live && setState({ status: "ready", ...r }))
-      .catch((e) => live && setState({ status: e.status === 404 ? "missing" : "error", error: e.message }));
+      .catch(async (e) => {
+        // Staff can preview a listing that isn't published yet, to check it before renters see it.
+        if (e.status === 404 && isStaff) {
+          try {
+            const r = await api.admin.property(id);
+            if (live) setState({ status: "ready", property: r.property, locator: null, preview: true });
+            return;
+          } catch { /* not a listing staff can see either: show "not available" */ }
+        }
+        if (live) setState({ status: e.status === 404 ? "missing" : "error", error: e.message });
+      });
     return () => { live = false; };
-  }, [id]);
+  }, [id, isStaff]);
   usePageTitle(state.property?.name || "Apartment");
   const back = `/apartments${session.get(LAST_SEARCH) || ""}`;
 
@@ -276,6 +295,7 @@ export function PropertyPage({ id, isSaved, onSave }) {
   return (
     <main className="page-shell route-page property-page">
       <Link href={back} className="text-link back-link"><ArrowLeft size={14} /> Back to results</Link>
+      {state.preview && <p className="sample-banner" role="status">Staff preview. This listing is {p.status}, so renters can’t see it. Publish it from the staff console when it’s ready.</p>}
       {p.source === "Sample data" && <p className="sample-banner">Sample listing for the FindIt beta. This is not a real property — details and photos are illustrative.</p>}
       <div className="property-head">
         <div>
@@ -283,7 +303,7 @@ export function PropertyPage({ id, isSaved, onSave }) {
           <h1>{p.name}</h1>
           <p className="property-address"><MapPin size={15} /> {[p.address, p.neighborhood, `${p.city || "Houston"}, TX ${p.zip}`.trim()].filter(Boolean).join(" · ")}</p>
         </div>
-        <SaveButton saved={isSaved(p.id)} onClick={() => onSave(p)} label={p.name} className="button save-wide" />
+        {!state.preview && <SaveButton saved={isSaved(p.id)} onClick={() => onSave(p)} label={p.name} className="button save-wide" />}
       </div>
       {(p.contactPhone || p.tourUrl) && (
         <div className="mobile-contact">
@@ -349,7 +369,7 @@ export function PropertyPage({ id, isSaved, onSave }) {
             <div><h3><CalendarDays size={16} /> Lease terms</h3><p>{p.leaseTerms || "Not provided"}</p></div>
           </section>
 
-          <ReportForm reasons={PROPERTY_REPORT_REASONS} onSubmit={(b) => api.reportProperty(p.id, b)} />
+          {!state.preview && <ReportForm reasons={PROPERTY_REPORT_REASONS} onSubmit={(b) => api.reportProperty(p.id, b)} />}
         </div>
 
         <aside className="property-side">

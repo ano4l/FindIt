@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, ExternalLink, MapPin, Search } from "lucide-react";
 import { LOCATOR_REPORT_REASONS } from "../shared/catalog.js";
-import { api, formatDate } from "./api.js";
+import { api, formatDate, withQuery } from "./api.js";
 import { EmptyState, Link, Photo, ReportForm, SaveButton, go, usePageTitle } from "./ui.jsx";
 import { PropertyCard } from "./properties.jsx";
 
@@ -16,7 +16,7 @@ export function LocatorSearchForm({ initial = "", initialSpecialty = "" }) {
       const p = new URLSearchParams(window.location.pathname === "/locators" ? window.location.search : "");
       q.trim() ? p.set("q", q.trim()) : p.delete("q");
       specialty ? p.set("specialty", specialty) : p.delete("specialty");
-      go(`/locators${p.size ? `?${p}` : ""}`);
+      go(withQuery("/locators", p));
     }}>
       <label className="search-field location-field"><span className="field-label">Neighborhood, city or ZIP</span>
         <span className="input-wrap"><MapPin size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="The Heights, Houston or 77380" /></span>
@@ -52,7 +52,7 @@ export function LocatorCard({ locator, saved, onSave }) {
 
 export function LocatorsPage({ search, isSaved, onSave }) {
   const params = useMemo(() => new URLSearchParams(search), [search]);
-  const q = params.get("q") || "", specialty = params.get("specialty") || "", sort = params.get("sort") || "name";
+  const q = params.get("q") || "", specialty = params.get("specialty") || "", sort = params.get("sort") || "";
   const [state, setState] = useState({ status: "loading", items: [], error: "" });
   usePageTitle("Houston apartment locators");
   useEffect(() => {
@@ -70,8 +70,8 @@ export function LocatorsPage({ search, isSaved, onSave }) {
       <div className="results-bar">
         <p className="results-count">{state.status === "ready" ? `${state.items.length} locator${state.items.length === 1 ? "" : "s"}` : ""}</p>
         <label className="sort-inline"><span>Sort by</span>
-          <select value={sort} onChange={(e) => { const p = new URLSearchParams(search); e.target.value === "name" ? p.delete("sort") : p.set("sort", e.target.value); go(`/locators${p.size ? `?${p}` : ""}`, { keepScroll: true }); }}>
-            <option value="name">Name</option><option value="experience">Most experienced</option>
+          <select value={sort} onChange={(e) => { const p = new URLSearchParams(search); e.target.value ? p.set("sort", e.target.value) : p.delete("sort"); go(withQuery("/locators", p), { keepScroll: true }); }}>
+            <option value="">Recommended</option><option value="name">Name</option><option value="experience">Most experienced</option>
           </select>
         </label>
       </div>
@@ -116,6 +116,7 @@ export function LocatorProfilePage({ id, isSaved, onSave, isPropertySaved, onSav
             <p className="company-name">{profile.company || "Company not provided"}</p>
             <p>{profile.about || "About information not provided."}</p>
             {row("Main area", profile.area)}
+            {row("Travels", profile.radius)}
             {row("Areas served", profile.serviceAreas?.join(", "))}
             {row("ZIP codes", profile.zipCodes?.join(", "))}
             {row("Specialties", profile.tags?.join(", "))}

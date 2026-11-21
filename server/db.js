@@ -1,240 +1,202 @@
-import { DatabaseSync } from "node:sqlite";
-import { readFileSync, mkdirSync } from "node:fs";
+// Database access for FindIt.
+//
+// Production uses Supabase Postgres through postgres.js (DATABASE_URL). Local development and the
+// tests use PGlite, an in-process Postgres, so the same SQL runs everywhere and nothing needs
+// installing. Queries are written with `?` placeholders; they are numbered ($1, $2, …) here.
+import { readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const NOW = "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
+const MIGRATIONS_DIR = resolve(here, "migrations");
 
-export function openDb(path = process.env.FINDIT_DB || resolve(here, "data/findit.db")) {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member','staff')),
-      email_verified INTEGER NOT NULL DEFAULT 0,
-      -- Reserved for Milestone 2 (paid memberships). Nothing reads this yet.
-      plan TEXT NOT NULL DEFAULT 'free',
-      created_at TEXT NOT NULL DEFAULT ${NOW}
-    );
-    CREATE TABLE IF NOT EXISTS tokens (
-      token_hash TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL CHECK (kind IN ('verify','reset')),
-      expires_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS locators (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      company TEXT NOT NULL DEFAULT '',
-      area TEXT NOT NULL DEFAULT '',
-      radius TEXT NOT NULL DEFAULT '',
-      years INTEGER,
-      response TEXT NOT NULL DEFAULT '',
-      tags TEXT NOT NULL DEFAULT '[]',
-      about TEXT NOT NULL DEFAULT '',
-      image TEXT NOT NULL DEFAULT '',
-      service_areas TEXT NOT NULL DEFAULT '[]',
-      zip_codes TEXT NOT NULL DEFAULT '[]',
-      languages TEXT NOT NULL DEFAULT '[]',
-      contact_email TEXT NOT NULL DEFAULT '',
-      contact_phone TEXT NOT NULL DEFAULT '',
-      rating TEXT,
-      reviews INTEGER,
-      featured INTEGER NOT NULL DEFAULT 0,
-      fast_response INTEGER NOT NULL DEFAULT 0,
-      verified INTEGER NOT NULL DEFAULT 0,
-      listings_url TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL DEFAULT 'Not stated',
-      status TEXT NOT NULL DEFAULT 'hidden' CHECK (status IN ('published','hidden','removed')),
-      created_at TEXT NOT NULL DEFAULT ${NOW},
-      updated_at TEXT NOT NULL DEFAULT ${NOW},
-      updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
-    );
-    CREATE TABLE IF NOT EXISTS favourites (
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      locator_id TEXT NOT NULL REFERENCES locators(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT ${NOW},
-      PRIMARY KEY (user_id, locator_id)
-    );
-    CREATE TABLE IF NOT EXISTS reports (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      locator_id TEXT NOT NULL REFERENCES locators(id) ON DELETE CASCADE,
-      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      reason TEXT NOT NULL,
-      details TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','dismissed')),
-      created_at TEXT NOT NULL DEFAULT ${NOW},
-      resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      resolved_at TEXT
-    );
-    -- Development mail log: used when no SMTP_URL is configured.
-    CREATE TABLE IF NOT EXISTS outbox (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      to_email TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      body TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT ${NOW}
-    );
-    CREATE INDEX IF NOT EXISTS idx_locators_status ON locators(status);
-  `);
-  const columns = new Set(db.prepare("PRAGMA table_info(locators)").all().map((c) => c.name));
-  if (!columns.has("contact_email")) db.exec("ALTER TABLE locators ADD COLUMN contact_email TEXT NOT NULL DEFAULT ''");
-  if (!columns.has("contact_phone")) db.exec("ALTER TABLE locators ADD COLUMN contact_phone TEXT NOT NULL DEFAULT ''");
-  migrate(db);
-  return db;
+const numbered = (sql) => { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); };
+// Timestamps come back as Date objects; the app works with ISO strings.
+const plain = (row) => {
+  if (row) for (const k of Object.keys(row)) if (row[k] instanceof Date) row[k] = row[k].toISOString();
+  return row;
+};
+
+function wrap(driver) {
+  return {
+    kind: driver.kind,
+    all: async (sql, ...params) => (await driver.query(numbered(sql), params)).rows.map(plain),
+    get: async (sql, ...params) => plain((await driver.query(numbered(sql), params)).rows[0]),
+    run: async (sql, ...params) => {
+      const r = await driver.query(numbered(sql), params);
+      return { changes: r.count, rows: r.rows.map(plain) };
+    },
+    // Several statements, no parameters (migrations).
+    exec: (sql) => driver.exec(sql),
+    transaction: (fn) => driver.transaction((d) => fn(wrap(d))),
+    close: () => driver.close?.(),
+  };
 }
 
-// Numbered schema changes. PRAGMA user_version records the last one applied.
-const MIGRATIONS = [
-  // 1: property catalogue, saved properties, reports for either kind of record, staff activity log.
-  `
-  CREATE TABLE properties (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    address TEXT NOT NULL DEFAULT '',
-    neighborhood TEXT NOT NULL DEFAULT '',
-    city TEXT NOT NULL DEFAULT 'Houston',
-    zip TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    floor_plans TEXT NOT NULL DEFAULT '[]',
-    amenities TEXT NOT NULL DEFAULT '[]',
-    photos TEXT NOT NULL DEFAULT '[]',
-    parking TEXT NOT NULL DEFAULT '',
-    pets TEXT NOT NULL DEFAULT 'unknown' CHECK (pets IN ('dogs-and-cats','cats-only','none','unknown')),
-    pet_details TEXT NOT NULL DEFAULT '',
-    incentives TEXT NOT NULL DEFAULT '',
-    lease_terms TEXT NOT NULL DEFAULT '',
-    contact_name TEXT NOT NULL DEFAULT '',
-    contact_phone TEXT NOT NULL DEFAULT '',
-    contact_email TEXT NOT NULL DEFAULT '',
-    website_url TEXT NOT NULL DEFAULT '',
-    tour_url TEXT NOT NULL DEFAULT '',
-    locator_id TEXT REFERENCES locators(id) ON DELETE SET NULL,
-    availability TEXT NOT NULL DEFAULT 'unknown'
-      CHECK (availability IN ('available','coming_soon','waitlist','unavailable','unknown')),
-    availability_note TEXT NOT NULL DEFAULT '',
-    availability_checked_at TEXT,
-    source TEXT NOT NULL DEFAULT 'Not stated',
-    featured INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'hidden' CHECK (status IN ('published','hidden','removed')),
-    created_at TEXT NOT NULL DEFAULT ${NOW},
-    updated_at TEXT NOT NULL DEFAULT ${NOW},
-    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
-  );
-  CREATE INDEX idx_properties_status ON properties(status);
-  CREATE TABLE property_favourites (
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT ${NOW},
-    PRIMARY KEY (user_id, property_id)
-  );
-  CREATE TABLE reports_v2 (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    locator_id TEXT REFERENCES locators(id) ON DELETE CASCADE,
-    property_id TEXT REFERENCES properties(id) ON DELETE CASCADE,
-    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    reason TEXT NOT NULL,
-    details TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','dismissed')),
-    created_at TEXT NOT NULL DEFAULT ${NOW},
-    resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    resolved_at TEXT,
-    CHECK ((locator_id IS NULL) <> (property_id IS NULL))
-  );
-  INSERT INTO reports_v2 (id, locator_id, user_id, reason, details, status, created_at, resolved_by, resolved_at)
-    SELECT id, locator_id, user_id, reason, details, status, created_at, resolved_by, resolved_at FROM reports;
-  DROP TABLE reports;
-  ALTER TABLE reports_v2 RENAME TO reports;
-  CREATE INDEX idx_reports_status ON reports(status);
-  CREATE TABLE audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    action TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    detail TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT ${NOW}
-  );
-  CREATE INDEX idx_audit_target ON audit_log(target_type, target_id);
-  `,
-];
+async function postgresDriver(url) {
+  const { default: postgres } = await import("postgres");
+  const local = /@(localhost|127\.0\.0\.1)(:\d+)?\//.test(url);
+  const sql = postgres(url, {
+    // Supabase's transaction pooler (port 6543) doesn't keep prepared statements.
+    prepare: false,
+    max: Number(process.env.DB_POOL_MAX || 3),
+    idle_timeout: 20,
+    connect_timeout: 10,
+    ...(/sslmode=/.test(url) ? {} : { ssl: local ? false : "require" }),
+    onnotice: () => {},
+  });
+  const make = (s) => ({
+    kind: "postgres",
+    query: async (text, params) => {
+      const r = await s.unsafe(text, params);
+      return { rows: Array.from(r), count: r.count ?? 0 };
+    },
+    exec: (text) => s.unsafe(text),
+    transaction: (fn) => s.begin((tx) => fn(make(tx))),
+    close: () => s.end?.({ timeout: 5 }),
+  });
+  return make(sql);
+}
 
-function migrate(db) {
-  const version = db.prepare("PRAGMA user_version").get().user_version;
-  for (let i = version; i < MIGRATIONS.length; i++) {
-    db.exec("BEGIN");
-    try {
-      db.exec(MIGRATIONS[i]);
-      db.exec(`PRAGMA user_version = ${i + 1}`);
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
+async function pgliteDriver(dataDir) {
+  const { PGlite } = await import("@electric-sql/pglite");
+  if (dataDir) mkdirSync(dataDir, { recursive: true });
+  const pg = await PGlite.create(dataDir);
+  const make = (c) => ({
+    kind: "pglite",
+    query: async (text, params) => {
+      const r = await c.query(text, params);
+      return { rows: r.rows, count: r.affectedRows ?? 0 };
+    },
+    exec: (text) => c.exec(text),
+    transaction: (fn) => c.transaction((tx) => fn(make(tx))),
+    close: () => c.close?.(),
+  });
+  return make(pg);
+}
+
+/**
+ * Opens the database.
+ * - A postgres:// URL (Supabase) uses postgres.js.
+ * - "memory" uses a throwaway in-process PGlite database (tests).
+ * - Otherwise a PGlite database stored in FINDIT_PGLITE_DIR (default server/data/pglite) for local development.
+ */
+export async function openDb(url = process.env.DATABASE_URL) {
+  if (url && /^postgres(ql)?:\/\//i.test(url)) return wrap(await postgresDriver(url));
+  if (process.env.VERCEL) throw new Error("DATABASE_URL must be set to the Supabase connection string.");
+  if (url === "memory") return wrap(await pgliteDriver());
+  return wrap(await pgliteDriver(process.env.FINDIT_PGLITE_DIR || resolve(here, "data/pglite")));
+}
+
+// The tables worth keeping, in the order they must be restored (a row's references come first).
+// Sessions, email links, rate limits and the mail log are left out: they are short-lived.
+export const BACKUP_TABLES = ["users", "locators", "properties", "favourites", "property_favourites", "reports", "audit_log"];
+
+// Reads every backed-up table at one moment in time, so rows never point at something the copy lacks.
+export function exportTables(db) {
+  return db.transaction(async (tx) => {
+    await tx.exec("set transaction isolation level repeatable read read only");
+    const data = { exportedAt: new Date().toISOString(), tables: {} };
+    for (const t of BACKUP_TABLES) data.tables[t] = await tx.all(`select * from ${t} order by 1`);
+    return data;
+  });
+}
+
+// Loads an export made by exportTables into a database whose tables exist but are empty.
+export function restoreTables(db, data) {
+  return db.transaction(async (tx) => {
+    for (const t of BACKUP_TABLES) {
+      if (await tx.get(`select 1 as found from ${t} limit 1`)) throw new Error(`The "${t}" table already has rows. A backup can only be restored into an empty database.`);
     }
+    const counts = {};
+    for (const t of BACKUP_TABLES) {
+      const rows = data?.tables?.[t] || [];
+      for (const row of rows) {
+        const cols = Object.keys(row);
+        if (cols.some((c) => !/^[a-z_][a-z0-9_]*$/.test(c))) throw new Error(`Unexpected column name in the "${t}" backup.`);
+        await tx.run(`insert into ${t} (${cols.join(", ")}) values (${cols.map(() => "?").join(", ")})`, ...cols.map((c) => row[c]));
+      }
+      counts[t] = rows.length;
+    }
+    // Ids were copied as they were, so move each id counter past the highest one in use.
+    const identities = await tx.all("select table_name, column_name from information_schema.columns where table_schema = 'public' and is_identity = 'YES'");
+    for (const { table_name: t, column_name: c } of identities) {
+      if (BACKUP_TABLES.includes(t)) await tx.get(`select setval(pg_get_serial_sequence('${t}', '${c}'), greatest((select coalesce(max(${c}), 0) from ${t}), 1))`);
+    }
+    return counts;
+  });
+}
+
+// Applies any SQL files in server/migrations that haven't run yet, each in its own transaction.
+export async function migrate(db) {
+  await db.exec(`create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now());
+    alter table schema_migrations enable row level security;`);
+  const applied = [];
+  for (const name of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort()) {
+    const ran = await db.transaction(async (tx) => {
+      await tx.get("select pg_advisory_xact_lock(724001)"); // one migrator at a time
+      if (await tx.get("select 1 from schema_migrations where name = ?", name)) return false;
+      await tx.exec(readFileSync(resolve(MIGRATIONS_DIR, name), "utf8"));
+      await tx.run("insert into schema_migrations (name) values (?)", name);
+      return true;
+    });
+    if (ran) applied.push(name);
   }
+  return applied;
 }
 
-// Removes expired sessions and one-time tokens. Safe to run any time.
-export function pruneExpired(db) {
-  const now = new Date().toISOString();
-  db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
-  db.prepare("DELETE FROM tokens WHERE expires_at <= ?").run(now);
+// Removes expired sessions and email links, old rate-limit windows and old dev mail. Safe to run any time.
+export async function pruneExpired(db) {
+  const n = async (sql) => (await db.run(sql)).changes;
+  return {
+    sessions: await n("delete from sessions where expires_at <= now()"),
+    tokens: await n("delete from tokens where expires_at <= now()"),
+    rateLimits: await n("delete from rate_limits where window_start < now() - interval '1 day'"),
+    outbox: await n("delete from outbox where created_at < now() - interval '30 days'"),
+  };
 }
 
-export function seedLocators(db) {
-  const { n } = db.prepare("SELECT COUNT(*) AS n FROM locators").get();
-  if (n > 0) return 0;
+export async function seedLocators(db) {
+  if ((await db.get("select count(*)::int as n from locators")).n > 0) return 0;
   const seed = JSON.parse(readFileSync(resolve(here, "seed-locators.json"), "utf8"));
-  const insert = db.prepare(`INSERT INTO locators
-    (id,name,company,area,radius,years,response,tags,about,image,service_areas,zip_codes,languages,
-     rating,reviews,featured,fast_response,verified,listings_url,source,status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'published')`);
   for (const l of seed) {
-    insert.run(l.id, l.name, l.company, l.area, l.radius, l.years, l.response,
+    await db.run(`insert into locators
+      (id,name,company,area,radius,years,response,tags,about,image,service_areas,zip_codes,languages,
+       rating,reviews,featured,fast_response,verified,listings_url,source,status)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'published')`,
+      l.id, l.name, l.company, l.area, l.radius, l.years, l.response,
       JSON.stringify(l.tags), l.about, l.image, JSON.stringify(l.serviceAreas),
       JSON.stringify(l.zipCodes), JSON.stringify(l.languages || []), l.rating, l.reviews,
-      l.featured ? 1 : 0, l.fastResponse ? 1 : 0, l.verified ? 1 : 0, l.listingsUrl, "Sample data");
+      !!l.featured, !!l.fastResponse, !!l.verified, l.listingsUrl, "Sample data");
   }
   return seed.length;
 }
 
 // Sample listings are clearly labelled "Sample data". Dates are relative to when the seed runs
 // so the demo always shows a realistic mix of fresh and stale availability.
-export function seedProperties(db, now = Date.now()) {
-  const { n } = db.prepare("SELECT COUNT(*) AS n FROM properties").get();
-  if (n > 0) return 0;
+export async function seedProperties(db, now = Date.now()) {
+  if ((await db.get("select count(*)::int as n from properties")).n > 0) return 0;
   const seed = JSON.parse(readFileSync(resolve(here, "seed-properties.json"), "utf8"));
   const day = 86400000;
   const date = (offsetDays) => new Date(now + offsetDays * day).toISOString().slice(0, 10);
-  const locatorIds = new Set(db.prepare("SELECT id FROM locators").all().map((r) => r.id));
-  const insert = db.prepare(`INSERT INTO properties
-    (id,name,address,neighborhood,city,zip,description,floor_plans,amenities,photos,parking,pets,pet_details,
-     incentives,lease_terms,contact_name,contact_phone,contact_email,website_url,tour_url,locator_id,
-     availability,availability_note,availability_checked_at,source,featured,status,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'published',?)`);
+  const locatorIds = new Set((await db.all("select id from locators")).map((r) => r.id));
   for (const p of seed) {
     // Same key order the API writes, so an unchanged edit isn't seen as a change.
     const plans = p.floorPlans.map(({ name, beds, baths, sqft, rentMin, rentMax, availableInDays, units }) => ({
       name, beds, baths, sqft, rentMin, rentMax, availableFrom: availableInDays == null ? "" : date(availableInDays), units,
     }));
     const checked = new Date(now - p.checkedDaysAgo * day).toISOString();
-    insert.run(p.id, p.name, p.address, p.neighborhood, p.city || "Houston", p.zip, p.description,
+    await db.run(`insert into properties
+      (id,name,address,neighborhood,city,zip,description,floor_plans,amenities,photos,parking,pets,pet_details,
+       incentives,lease_terms,contact_name,contact_phone,contact_email,website_url,tour_url,locator_id,
+       availability,availability_note,availability_checked_at,source,featured,status,updated_at)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::timestamptz,?,?,'published',?::timestamptz)`,
+      p.id, p.name, p.address, p.neighborhood, p.city || "Houston", p.zip, p.description,
       JSON.stringify(plans), JSON.stringify(p.amenities), JSON.stringify(p.photos), p.parking || "",
       p.pets || "unknown", p.petDetails || "", p.incentives || "", p.leaseTerms || "",
       p.contactName || "", p.contactPhone || "", p.contactEmail || "", p.websiteUrl || "", p.tourUrl || "",
       locatorIds.has(p.locatorId) ? p.locatorId : null,
-      p.availability, p.availabilityNote || "", checked, "Sample data", p.featured ? 1 : 0, checked);
+      p.availability, p.availabilityNote || "", checked, "Sample data", !!p.featured, checked);
   }
   return seed.length;
 }

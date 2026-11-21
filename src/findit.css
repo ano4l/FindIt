@@ -25,6 +25,31 @@
 .small { font-size: 12px; }
 .lede { max-width: 720px; margin: 12px 0 0; color: #526772; font-size: 16px; line-height: 1.7; }
 
+/* Sign-in, sign-up, reset and account screens. Inputs are 16px so iPhones don't zoom in on focus. */
+.auth-eyebrow { font-size: 11px; }
+.auth-kicker { font-size: 11px; }
+.auth-intro { font-size: 15px; line-height: 1.6; color: #5d6f76; }
+.auth-story p, .auth-story > p { font-size: 15px; line-height: 1.6; }
+.auth-form label { font-size: 13px; }
+.auth-form input, .auth-form select { height: 46px; font-size: 16px; }
+.auth-form input::placeholder { font-size: 13px; }
+.auth-submit { height: 46px; font-size: 15px; }
+.auth-switch, .auth-switch button { font-size: 14px; }
+.auth-switch { line-height: 1.6; }
+.workspace-back { font-size: 14px; }
+.staff-head-right { font-size: 13px; }
+
+/* Every locator in the directory is shown at every width (the base design hid cards after the third). */
+.locator-card:nth-child(n + 4) { display: block; }
+
+/* Short message for an action that failed away from any form, e.g. saving a favourite. */
+.app-toast { position: fixed; left: 50%; bottom: 20px; z-index: 60; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); margin: 0; padding: 12px 16px; border-radius: 10px; background: var(--navy, #0d2943); color: #fff; font-size: 14px; line-height: 1.45; box-shadow: 0 12px 30px rgba(9, 27, 42, 0.28); }
+.load-more .form-error { max-width: 520px; margin: 0 auto 10px; }
+
+/* Staff console tabs scroll sideways instead of pushing the page wider on phones. */
+.staff-tabs { overflow-x: auto; }
+.staff-tabs button { flex: 0 0 auto; white-space: nowrap; }
+
 .skip-link { position: absolute; left: -9999px; top: 8px; z-index: 50; padding: 10px 14px; border-radius: 8px; background: var(--navy); color: #fff; font-weight: 700; }
 .skip-link:focus { left: 8px; }
 #main:focus { outline: none; }
@@ -318,7 +343,6 @@
   .prop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .property-layout { grid-template-columns: minmax(0, 1fr) 290px; gap: 26px; }
   .how-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .locator-card:nth-child(n + 4) { display: block; }
 }
 @media (max-width: 900px) {
   .results-layout { grid-template-columns: minmax(0, 1fr); }
@@ -352,6 +376,12 @@
   .workspace-nav .workspace-back:not(:last-child) { display: none; }
   .trust-points { grid-template-columns: 1fr; gap: 14px; }
   .trust-points > div { flex-direction: row; align-items: center; }
+  /* The "confirm with the property" reminder stays visible on phones. */
+  .footer-bottom > span:nth-child(2) { display: inline; }
+  /* One column means one column: the wide fields no longer reserve a second track. */
+  .prop-search-panel .location-field, .prop-search-panel .search-button, .locator-search-panel .location-field, .locator-search-panel .search-button { grid-column: auto; }
+  .staff-head-right > span { display: none; }
+  .staff-tabs button { padding: 10px 12px; }
 }
 @media (max-width: 560px) {
   .prop-grid, .results .prop-grid { grid-template-columns: 1fr; }
@@ -362,6 +392,9 @@
   .partner-band > div { flex-wrap: wrap; }
   .footer-bottom { flex-direction: column; align-items: flex-start; padding-block: 14px; }
   .nav-logout { display: none; }
+  /* Signed-out header (logo, Log in, Join, menu) fits a 320–375px phone without sideways scrolling. */
+  .nav-shell { padding-inline: 16px; gap: 10px; }
+  .nav-join svg { display: none; }
   .nav-mobile-only { display: flex; align-items: center; height: 46px; padding: 0; border: 0; background: none; color: #a33; font: 600 13px "DM Sans", sans-serif; text-align: left; cursor: pointer; }
   .results-head h1 { font-size: 1.85rem; }
 }
