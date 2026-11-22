@@ -72,6 +72,8 @@ export const api = {
     upload: (file) => call("POST", "/admin/uploads", undefined, { raw: file }),
     reports: (status = "open") => call("GET", `/admin/reports?status=${status}`),
     setReport: (rid, status) => call("POST", `/admin/reports/${rid}`, { status }),
+    messages: (status = "open") => call("GET", `/admin/messages?status=${status}`),
+    setMessage: (mid, handled) => call("POST", `/admin/messages/${mid}`, { handled }),
   },
 };
 

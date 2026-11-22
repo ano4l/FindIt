@@ -90,7 +90,7 @@ export async function openDb(url = process.env.DATABASE_URL) {
 
 // The tables worth keeping, in the order they must be restored (a row's references come first).
 // Sessions, email links, rate limits and the mail log are left out: they are short-lived.
-export const BACKUP_TABLES = ["users", "locators", "properties", "favourites", "property_favourites", "reports", "audit_log"];
+export const BACKUP_TABLES = ["users", "locators", "properties", "favourites", "property_favourites", "reports", "contact_messages", "audit_log"];
 
 // Reads every backed-up table at one moment in time, so rows never point at something the copy lacks.
 export function exportTables(db) {

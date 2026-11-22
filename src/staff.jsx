@@ -7,7 +7,7 @@ import { Link } from "./ui.jsx";
 import "./workspace.css";
 import "./account.css";
 
-const TABS = ["Listings", "Locators", "Reports", "Activity"];
+const TABS = ["Listings", "Locators", "Reports", "Messages", "Activity"];
 const ACTION_LABEL = { created: "Created", edited: "Edited", published: "Published", hid: "Hid", removed: "Removed", availability: "Updated availability", uploaded: "Uploaded", resolved: "Resolved", dismissed: "Dismissed", reopened: "Reopened", admin: "Became admin" };
 
 export function StaffConsole({ user, onHome, onSignOut }) {
@@ -16,9 +16,10 @@ export function StaffConsole({ user, onHome, onSignOut }) {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [reportCount, setReportCount] = useState(0);
+  const [messageCount, setMessageCount] = useState(0);
   const toastTimer = useRef();
   useEffect(() => { document.title = "Staff console · FindIt HTX"; }, []);
-  const refreshSummary = () => api.admin.summary().then((s) => { setSummary(s); setReportCount(s.openReports); }).catch((e) => setError(e.message));
+  const refreshSummary = () => api.admin.summary().then((s) => { setSummary(s); setReportCount(s.openReports); setMessageCount(s.openMessages || 0); }).catch((e) => setError(e.message));
   useEffect(() => { refreshSummary(); }, []);
   const flash = (m) => { setToast(m); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(""), 3500); };
   // Runs a staff action, then refreshes the counts and shows a confirmation or the error.
@@ -44,13 +45,17 @@ export function StaffConsole({ user, onHome, onSignOut }) {
             <button onClick={() => setTab("Listings")}><strong>{summary.listingsHidden}</strong><span>Hidden listings</span></button>
             <button onClick={() => setTab("Locators")}><strong>{summary.published}</strong><span>Published locators</span></button>
             <button onClick={() => setTab("Reports")} className={summary.openReports ? "metric-warn" : ""}><strong>{summary.openReports}</strong><span>Open reports</span></button>
+            <button onClick={() => setTab("Messages")} className={summary.openMessages ? "metric-warn" : ""}><strong>{summary.openMessages}</strong><span>New messages</span></button>
             <div><strong>{summary.members}</strong><span>Members</span></div>
           </div>
+        )}
+        {summary && summary.emailOn === false && (
+          <p className="staff-notice" role="note"><AlertTriangle size={15} /> <span><strong>Email is switched off.</strong> New accounts aren’t asked to confirm their address, password reset emails can’t be sent, and contact-form messages only appear in the Messages tab. Add an email provider (RESEND_API_KEY) to turn email on.</span></p>
         )}
         <div className="staff-tabs" role="tablist">
           {TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setError(""); }}>
-              {t}{t === "Reports" && reportCount ? ` (${reportCount})` : ""}
+              {t}{t === "Reports" && reportCount ? ` (${reportCount})` : ""}{t === "Messages" && messageCount ? ` (${messageCount})` : ""}
             </button>
           ))}
         </div>
@@ -59,6 +64,7 @@ export function StaffConsole({ user, onHome, onSignOut }) {
         {tab === "Listings" && <ListingsTab {...ctx} />}
         {tab === "Locators" && <LocatorsTab {...ctx} />}
         {tab === "Reports" && <ReportsTab {...ctx} />}
+        {tab === "Messages" && <MessagesTab {...ctx} />}
         {tab === "Activity" && <ActivityTab setError={setError} />}
       </section>
     </main>
@@ -509,6 +515,44 @@ function ReportsTab({ run, setError }) {
   );
 }
 
+/* ------------------------------------------------------------ Messages */
+// Everything sent through the contact form. Replying happens in the staff member's own email.
+function MessagesTab({ run, setError }) {
+  const [status, setStatus] = useState("open");
+  const [rows, setRows] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const load = () => { setFailed(false); return api.admin.messages(status).then((r) => setRows(r.messages)).catch((e) => { setFailed(true); setError(e.message); }); };
+  useEffect(() => { setRows(null); load(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+  const act = async (fn, msg) => { if (await run(fn, msg)) load(); };
+  return (
+    <>
+      <div className="staff-toolbar">
+        <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Message status"><option value="open">New</option><option value="done">Dealt with</option></select>
+      </div>
+      {!rows ? (failed ? <LoadFailed what="the messages" onRetry={() => { setError(""); load(); }} /> : <p role="status">Loading messages…</p>)
+        : rows.length === 0 ? <p className="account-empty">{status === "open" ? "No new messages." : "No messages have been dealt with yet."}</p> : (
+          <ul className="report-list">
+            {rows.map((m) => (
+              <li key={m.id}>
+                <div>
+                  <span className="report-kind">{m.topic}</span>{" "}<strong>{m.name}</strong>
+                  <p className="message-body">{m.message}</p>
+                  <small>{formatDate(m.createdAt)} · {m.email}{m.handledAt ? ` · dealt with ${formatDate(m.handledAt)}${m.handledBy ? ` by ${m.handledBy}` : ""}` : ""}</small>
+                </div>
+                <div className="row-actions">
+                  <a className="row-link" href={`mailto:${m.email}?subject=${encodeURIComponent(`Re: your message to FindIt (${m.topic})`)}`}>Reply by email</a>
+                  {m.handled
+                    ? <button onClick={() => act(() => api.admin.setMessage(m.id, false), "Message moved back to new.")}>Move back to new</button>
+                    : <button onClick={() => act(() => api.admin.setMessage(m.id, true), "Message marked as dealt with.")}><Check size={12} /> Mark dealt with</button>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+    </>
+  );
+}
+
 /* ------------------------------------------------------------ Activity */
 function ActivityTab({ setError }) {
   const [rows, setRows] = useState(null);
@@ -526,7 +570,7 @@ function ActivityTab({ setError }) {
             <td>{formatDate(a.at)}<br /><small>{new Date(a.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</small></td>
             <td>{a.by || "Unknown"}</td>
             <td>{ACTION_LABEL[a.action] || a.action}</td>
-            <td><small>{{ property: "Listing", locator: "Locator", report: "Report", photo: "Photo", account: "Account" }[a.targetType] || a.targetType}</small><br />{a.targetName}</td>
+            <td><small>{{ property: "Listing", locator: "Locator", report: "Report", photo: "Photo", account: "Account", message: "Message" }[a.targetType] || a.targetType}</small><br />{a.targetName}</td>
             <td><small>{a.detail}</small></td>
           </tr>
         ))}</tbody>

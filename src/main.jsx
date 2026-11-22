@@ -26,6 +26,7 @@ function App() {
   const [search, setSearch] = useState(window.location.search);
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
+  const [emailOn, setEmailOn] = useState(true); // false while the site runs without confirmation emails
   const [saved, setSaved] = useState(EMPTY_SAVED);
   const [savedError, setSavedError] = useState("");
   const [savedLoading, setSavedLoading] = useState(false);
@@ -38,7 +39,7 @@ function App() {
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, []);
-  useEffect(() => { api.me().then((r) => setUser(r.user)).catch(() => setUser(null)).finally(() => setAuthReady(true)); }, []);
+  useEffect(() => { api.me().then((r) => { setUser(r.user); setEmailOn(r.emailOn !== false); }).catch(() => setUser(null)).finally(() => setAuthReady(true)); }, []);
   useEffect(() => {
     if (!user) { setSaved(EMPTY_SAVED); setSavedError(""); setSavedLoading(false); return; }
     setSavedError(""); setSavedLoading(true);
@@ -76,7 +77,7 @@ function App() {
     const token = params.get("token") || params.get("reset") || params.get("verify");
     const next = params.get("next");
     const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : null;
-    return <AuthScreen key={`${mode}-${token || ""}`} mode={mode} token={token}
+    return <AuthScreen key={`${mode}-${token || ""}`} mode={mode} token={token} emailOn={emailOn}
       onMode={(m) => go(AUTH_PATHS[m] || `/${m}${safeNext ? `?next=${encodeURIComponent(safeNext)}` : ""}`)}
       onHome={() => go("/")}
       onSignedIn={(u) => { setUser(u); go(safeNext || (u.role === "staff" ? "/staff" : "/account")); }} />;

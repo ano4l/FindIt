@@ -12,7 +12,7 @@ pnpm dev:server     # API on http://localhost:3001 (creates the database, loads 
 pnpm dev            # React app on http://localhost:5173 (proxies /api and /uploads to the API)
 ```
 
-**The first account to sign up and confirm its email becomes the admin** (the staff role, which opens the staff console). Everyone who confirms after that is a regular member. On a new database, register yourself before sharing the address with anyone else. `pnpm staff you@example.com 'a-long-password' "Your Name"` adds further staff accounts, or restores access if you lose the admin login.
+**The first account becomes the admin** (the staff role, which opens the staff console): the first to confirm its email, or simply the first to sign up while email is switched off (see *Running without email*). Everyone after that is a regular member. On a new database, register yourself before sharing the address with anyone else. `pnpm staff you@example.com 'a-long-password' "Your Name"` adds further staff accounts, or restores access if you lose the admin login.
 
 Without `RESEND_API_KEY`, confirmation and password-reset emails are printed in the API console and listed at `/api/dev/outbox` (development only). Copy the link from there.
 
@@ -34,8 +34,20 @@ Use **two Supabase projects**, one for production and one for staging/preview de
      ```
      Once the site is deployed, sign up on it straight away: the first confirmed account becomes the admin (see above).
    Run `pnpm db:setup` again whenever a new file appears in `server/migrations/`.
-2. **Resend**: add and verify your sending domain (DNS records), create an API key → `RESEND_API_KEY`, and set `MAIL_FROM` to an address on that domain.
-3. **Vercel**: import the repository and add the variables from `.env.example` for Production and Preview (Preview pointing at the staging Supabase project). Leave `PUBLIC_URL` unset on Preview so email links point at the preview itself. Set `CRON_SECRET` to a long random string.
+2. **Resend** (needs a domain you own; skip it until you have one, see *Running without email*): add and verify your sending domain (DNS records), create an API key → `RESEND_API_KEY`, and set `MAIL_FROM` to an address on that domain.
+3. **Vercel**: import the repository and add the variables from `.env.example` for Production and Preview (Preview pointing at the staging Supabase project). The minimum is `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET`.
+   - `CRON_SECRET` is any long random string you make up; Vercel sends it with the nightly jobs. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+   - `PUBLIC_URL` is the site's own address (for example `https://your-project.vercel.app`, no trailing slash). It is only used for the links inside emails, so it isn't needed while email is off. Leave it unset on Preview so links point at the preview itself.
+
+### Running without email
+
+Until an email provider is configured (`RESEND_API_KEY`, or `SMTP_URL`), the hosted site runs with email switched off:
+- Signing up creates the account and signs the person in straight away; no confirmation email is sent. The first account to sign up is the admin.
+- "Forgot password" can't send a link. People are pointed to the contact form, and you can set a new password for them with `pnpm set-password someone@example.com 'a-new-long-password'`.
+- Contact-form messages are not emailed; they wait in the staff console's **Messages** tab (they are kept there when email is on, too).
+- The staff console shows a notice so this isn't forgotten.
+
+Add `RESEND_API_KEY` (plus `MAIL_FROM`, `CONTACT_EMAIL` and `PUBLIC_URL`) and redeploy to turn email on. Accounts created while it was off keep working and are treated as confirmed. Supabase's own email service is not a way around this: without a custom domain it only delivers to the project's team members.
 
 How it runs on Vercel:
 - The built React app is served from Vercel's CDN; `vercel.json` sends `/api/*` to the Express app in `api/index.js` and every other path to the app shell. Security headers and the Content-Security-Policy are set in `vercel.json`.
@@ -70,6 +82,7 @@ How it runs on Vercel:
 - Listings: add, edit, preview before publishing, publish, hide, remove; quick availability change and “Mark checked”; floor-plan editor; photo upload or https links, reorder and set the cover; “needs attention” filter (stale availability, no photos, no prices).
 - Locator profiles: add, edit, publish, hide, remove.
 - Reports for listings and locators: open / resolved / dismissed, hide the record from the report.
+- Messages: everything sent through the contact form, with a reply-by-email link and a "dealt with" list.
 - Change history per listing and an activity log of staff actions (who, what, when; only fields that actually changed).
 
 **Foundation**

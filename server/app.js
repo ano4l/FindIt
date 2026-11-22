@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hashPassword, verifyPassword, newToken, hashToken, rateLimit } from "./security.js";
-import { sendMail } from "./mailer.js";
+import { sendMail, mailProviderConfigured } from "./mailer.js";
 import { pruneExpired, exportTables, BACKUP_TABLES } from "./db.js";
 import { createStorage, PHOTO_TYPES } from "./storage.js";
 import {
@@ -323,6 +323,7 @@ export function createApp(db, {
   distDir = resolve(here, "../dist"),
   uploadsDir = process.env.FINDIT_UPLOADS || resolve(here, "data/uploads"),
   storage = createStorage({ uploadsDir }),
+  emailEnabled, // tests can force email on or off; normally it follows the configuration (see emailOn)
 } = {}) {
   const app = express();
   // Vercel always counts as production, so the development-only helpers can never be exposed there.
@@ -378,6 +379,16 @@ export function createApp(db, {
     : req.user.role !== "staff" ? next(new HttpError(403, "Staff access only.")) : next());
   const limit = (opts) => rateLimit(db, opts);
 
+  // Whether confirmation and reset emails can reach people. On the hosted site this is off until an email
+  // provider is configured (RESEND_API_KEY or SMTP_URL): accounts then work without confirming an address
+  // and password reset by email is unavailable. Local development counts as on, because emails are
+  // written to the outbox where their links can be read.
+  const emailOn = () => (emailEnabled !== undefined ? emailEnabled : mailProviderConfigured() || !prod);
+  const ADMIN_LOCK = "select pg_advisory_xact_lock(724002)";
+  const noAdminYet = async (tx) => !(await tx.get("select 1 as found from users where role = 'staff' limit 1"));
+  const recordFirstAdmin = (tx, userId, email, detail) => tx.run(
+    "insert into audit_log (user_id, action, target_type, target_id, detail) values (?,?,?,?,?)", userId, "admin", "account", email, detail);
+
   const origin = (req) => (process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "");
   const startSession = async (res, userId) => {
     const t = newToken();
@@ -399,17 +410,16 @@ export function createApp(db, {
     to: user.email, subject: "Confirm your FindIt email address",
     text: `Hi ${user.name},\n\nConfirm your email to finish creating your FindIt account:\n${origin(req)}/verify-email?token=${await issueToken(user.id, "verify", 2 * DAY)}\n\nThis link works for 48 hours. If you didn't sign up, you can ignore this email.`,
   });
-  // Marks an account's email as confirmed. The first account ever confirmed becomes the site's admin
-  // (the staff role); everyone after that stays a member. The lock makes confirmations that arrive
-  // together take turns, so only one of them can be first. Returns true when this account became admin.
+  // Marks an account's email as confirmed. While the site has no admin, the account being confirmed
+  // becomes the admin (the staff role); everyone after that stays a member. The lock makes confirmations
+  // that arrive together take turns, so only one can be first. Returns true when this account became admin.
   const confirmEmail = (userId) => db.transaction(async (tx) => {
-    await tx.get("select pg_advisory_xact_lock(724002)");
+    await tx.get(ADMIN_LOCK);
     const u = await tx.get("select email, email_verified from users where id = ?", userId);
     if (!u || u.email_verified) return false;
-    const first = !(await tx.get("select 1 as found from users where email_verified limit 1"));
+    const first = await noAdminYet(tx);
     await tx.run(first ? "update users set email_verified = true, role = 'staff' where id = ?" : "update users set email_verified = true where id = ?", userId);
-    if (first) await tx.run("insert into audit_log (user_id, action, target_type, target_id, detail) values (?,?,?,?,?)",
-      userId, "admin", "account", u.email, "First confirmed account on the site");
+    if (first) await recordFirstAdmin(tx, userId, u.email, "First confirmed account on the site");
     return first;
   });
   const audit = (req, action, targetType, targetId, detail = "") =>
@@ -425,6 +435,25 @@ export function createApp(db, {
     if (!emailOk(email)) throw bad("Please enter a valid email address.");
     const pw = passwordProblem(password); if (pw) throw bad(pw);
     const existing = await db.get("select * from users where email = ?", email);
+    if (!emailOn()) {
+      // No email provider yet, so nobody can be sent a confirmation link: the account works straight
+      // away and the person is signed in. The first account on the site becomes the admin.
+      const taken = new HttpError(409, "An account with this email already exists. Sign in instead.", "account_exists");
+      if (existing) throw taken;
+      let made;
+      try {
+        made = await db.transaction(async (tx) => {
+          await tx.get(ADMIN_LOCK);
+          const first = await noAdminYet(tx);
+          const row = await tx.get("insert into users (email, name, password_hash, role, email_verified) values (?,?,?,?,true) returning id",
+            email, name, hashPassword(password), first ? "staff" : "member");
+          if (first) await recordFirstAdmin(tx, row.id, email, "First account on the site");
+          return { id: row.id, role: first ? "staff" : "member" };
+        });
+      } catch (e) { if (e.code === "23505") throw taken; throw e; } // two sign-ups with the same address at once
+      await startSession(res, made.id);
+      return res.status(201).json({ ok: true, firstAdmin: made.role === "staff", user: userOut({ id: made.id, email, name, role: made.role }) });
+    }
     if (!existing) {
       const created = await db.get("insert into users (email, name, password_hash) values (?,?,?) returning id", email, name, hashPassword(password));
       await sendVerify(req, { id: created.id, email, name });
@@ -449,6 +478,7 @@ export function createApp(db, {
   });
 
   app.post("/api/auth/resend", authLimit, async (req, res) => {
+    if (!emailOn()) return res.json({ ok: true, message: "Email confirmation is switched off at the moment, so you can sign in straight away." });
     const u = await db.get("select * from users where email = ?", clean(req.body.email, 320).toLowerCase());
     if (u && !u.email_verified) await sendVerify(req, u);
     res.json({ ok: true, message: "If that account needs confirming, a new link is on its way." });
@@ -458,9 +488,12 @@ export function createApp(db, {
     const u = await db.get("select * from users where email = ?", clean(req.body.email, 320).toLowerCase());
     const ok = u ? verifyPassword(String(req.body.password ?? ""), u.password_hash) : (verifyPassword("x", hashPassword("y")), false);
     if (!ok) throw new HttpError(401, "Email or password is incorrect.", "bad_credentials");
-    if (!u.email_verified) throw new HttpError(403, "Please confirm your email address first. Check your inbox for the link.", "email_not_verified");
+    if (!u.email_verified) {
+      if (emailOn()) throw new HttpError(403, "Please confirm your email address first. Check your inbox for the link.", "email_not_verified");
+      await confirmEmail(u.id); // no email provider: there is no link to wait for
+    }
     await startSession(res, u.id);
-    res.json({ user: userOut(u) });
+    res.json({ user: userOut(await db.get("select * from users where id = ?", u.id)) });
   });
 
   app.post("/api/auth/logout", async (req, res) => {
@@ -470,9 +503,10 @@ export function createApp(db, {
     res.json({ ok: true });
   });
 
-  app.get("/api/auth/me", (req, res) => res.json({ user: req.user ? userOut(req.user) : null }));
+  app.get("/api/auth/me", (req, res) => res.json({ user: req.user ? userOut(req.user) : null, emailOn: emailOn() }));
 
   app.post("/api/auth/forgot", authLimit, async (req, res) => {
+    if (!emailOn()) throw new HttpError(503, "Password reset by email isn't switched on yet. Send us a message through the contact page and we'll help you get back in.", "email_off");
     const u = await db.get("select * from users where email = ?", clean(req.body.email, 320).toLowerCase());
     if (u) await mail({
       to: u.email, subject: "Reset your FindIt password",
@@ -508,9 +542,14 @@ export function createApp(db, {
     if (name.length < 2) throw bad("Please enter your name.");
     if (!emailOk(email)) throw bad("Please enter a valid email address.");
     if (message.length < 10) throw bad("Please enter a message of at least 10 characters.");
+    // Every message is kept for staff to read in the console. Email, when it is on, is only a heads-up,
+    // so a mail problem never loses a message or shows the visitor an error.
+    await db.run("insert into contact_messages (name, email, topic, message) values (?,?,?,?)", name, email, topic, message);
     const to = process.env.CONTACT_EMAIL || (!prod ? "findit-inbox@localhost" : "");
-    if (!to) throw new HttpError(503, "The contact form is temporarily unavailable. Please try again later.");
-    await mail({ to, replyTo: email, subject: `FindIt enquiry (${topic}) from ${name}`, text: `From: ${name} <${email}>\nTopic: ${topic}\n\n${message}` });
+    if (to && emailOn()) {
+      try { await sendMail(db, { to, replyTo: email, subject: `FindIt enquiry (${topic}) from ${name}`, text: `From: ${name} <${email}>\nTopic: ${topic}\n\n${message}` }); }
+      catch (e) { console.error(e); }
+    }
     res.status(201).json({ ok: true, message: "Thanks. Your message has been sent to the FindIt team. We usually reply within two working days." });
   });
 
@@ -761,8 +800,28 @@ export function createApp(db, {
       published: await c("select count(*)::int as n from locators where status='published'"),
       hidden: await c("select count(*)::int as n from locators where status='hidden'"),
       openReports: await c("select count(*)::int as n from reports where status='open'"),
+      openMessages: await c("select count(*)::int as n from contact_messages where not handled"),
       members: await c("select count(*)::int as n from users where role='member'"),
+      emailOn: emailOn(),
     });
+  });
+
+  // Contact-form messages
+  app.get("/api/admin/messages", needStaff, async (req, res) => {
+    const rows = await db.all(`select m.*, u.name as handled_by_name from contact_messages m left join users u on u.id = m.handled_by
+      where m.handled = ? order by m.id desc limit 200`, req.query.status === "done");
+    res.json({ messages: rows.map((m) => ({ id: m.id, name: m.name, email: m.email, topic: m.topic, message: m.message, handled: !!m.handled,
+      handledBy: m.handled_by_name || "", handledAt: m.handled_at, createdAt: m.created_at })) });
+  });
+  app.post("/api/admin/messages/:id", needStaff, async (req, res) => {
+    const id = Number.parseInt(req.params.id, 10), handled = !!req.body.handled;
+    if (!Number.isInteger(id)) throw notFound("Message not found.");
+    const r = handled
+      ? await db.run("update contact_messages set handled = true, handled_by = ?, handled_at = now() where id = ?", req.user.id, id)
+      : await db.run("update contact_messages set handled = false, handled_by = null, handled_at = null where id = ?", id);
+    if (!r.changes) throw notFound("Message not found.");
+    await audit(req, handled ? "resolved" : "reopened", "message", id);
+    res.json({ ok: true });
   });
   app.get("/api/admin/activity", needStaff, async (_req, res) => {
     const rows = await db.all(`select a.*, u.name as user_name, p.name as property_name, l.name as locator_name

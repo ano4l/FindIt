@@ -4,6 +4,9 @@
 // hosted site sending fails with a clear error instead.
 let warned = false;
 
+// True when real email can be sent. Until then the hosted site runs without confirmation emails.
+export const mailProviderConfigured = () => !!(process.env.RESEND_API_KEY || process.env.SMTP_URL);
+
 export async function sendMail(db, { to, subject, text, replyTo }) {
   const from = process.env.MAIL_FROM || "FindIt <no-reply@findit.local>";
   if (process.env.RESEND_API_KEY) {

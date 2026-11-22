@@ -16,7 +16,7 @@ export function Brand({ onHome }) {
 
 /* ---------------------------------------------------------------- Auth */
 // view: signin | signup | forgot | reset | verify | resend | notice
-export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
+export function AuthScreen({ mode, token, emailOn = true, onMode, onHome, onSignedIn }) {
   // A confirm or reset address opened without its token can't do anything, so it goes straight to the
   // screen where a new link can be requested instead of waiting forever.
   const broken = !token && (mode === "verify" || mode === "reset");
@@ -49,6 +49,8 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
     try {
       if (view === "signup") {
         const r = await api.signup({ name: f.name, email: f.email, password: f.password });
+        // While confirmation emails are switched off the new account is signed in straight away.
+        if (r.user) { onSignedIn(r.user); return; }
         setNotice(r.message); setView("notice");
       } else if (view === "signin") {
         const { user } = await api.login({ email: f.email, password: f.password });
@@ -70,7 +72,9 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
 
   const copy = {
     signin: ["WELCOME BACK", "Sign in to FindIt", "Save apartments and locators, and pick up where you left off."],
-    signup: ["CREATE YOUR ACCOUNT", "Join FindIt", "Free to join. We'll email you a link to confirm your address. Enter your first and last name and create a strong password."],
+    signup: ["CREATE YOUR ACCOUNT", "Join FindIt", emailOn
+      ? "Free to join. We'll email you a link to confirm your address. Enter your first and last name and create a strong password."
+      : "Free to join. Enter your first and last name and create a strong password."],
     forgot: ["RESET PASSWORD", "Forgot your password?", "Enter your email and we'll send you a reset link."],
     reset: ["RESET PASSWORD", "Choose a new password", "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol."],
     verify: ["ONE MOMENT", "Confirming your email", "This only takes a second."],
@@ -122,7 +126,9 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
               </button>
             </form>
           )}
-          {view === "signin" && <p className="auth-switch"><button onClick={() => go("forgot")}>Forgot password?</button> · <button onClick={() => go("resend")}>Didn’t get a confirmation email?</button></p>}
+          {view === "signin" && (emailOn
+            ? <p className="auth-switch"><button onClick={() => go("forgot")}>Forgot password?</button> · <button onClick={() => go("resend")}>Didn’t get a confirmation email?</button></p>
+            : <p className="auth-switch">Forgotten your password? <a href="/contact?topic=Account%20help">Send us a message</a> and we’ll help you back in.</p>)}
           {view === "reset" && <p className="auth-switch"><button onClick={() => go("forgot")}>Request a new reset link</button></p>}
           {view === "notice" && <p className="auth-switch">Nothing after a few minutes? Check your spam folder, or <button onClick={() => go("resend")}>send a new confirmation link</button>.</p>}
           {(view === "signin" || view === "signup") && (

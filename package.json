@@ -11,6 +11,7 @@
     "dev:server": "node --watch server/index.js",
     "start": "NODE_ENV=production node server/index.js",
     "staff": "node --env-file-if-exists=.env server/create-staff.js",
+    "set-password": "node --env-file-if-exists=.env server/set-password.js",
     "backup": "node --env-file-if-exists=.env server/backup.js",
     "db:setup": "node --env-file-if-exists=.env server/setup.js",
     "db:seed": "node --env-file-if-exists=.env server/seed.js",

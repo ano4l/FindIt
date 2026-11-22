@@ -300,6 +300,19 @@ test("contact form validates and records a message", async () => {
   const mail = await db.get("select subject, body from outbox where to_email = 'findit-inbox@localhost' order by id desc limit 1");
   assert.match(mail.body, /renter@example\.com/);
   assert.match(mail.subject, /List or update a property/);
+  // The message is also kept for staff, who can mark it as dealt with.
+  assert.equal((await anon("GET", "/api/admin/messages")).status, 401);
+  const s = await staff();
+  const open = (await s("GET", "/api/admin/messages")).body.messages;
+  const mine = open.find((m) => m.email === "renter@example.com");
+  assert.equal(mine.topic, "List or update a property");
+  assert.match(mine.message, /Houston directory/);
+  assert.ok((await s("GET", "/api/admin/summary")).body.openMessages >= 1);
+  assert.equal((await s("POST", `/api/admin/messages/${mine.id}`, { handled: true })).status, 200);
+  assert.equal((await s("GET", "/api/admin/messages")).body.messages.some((m) => m.id === mine.id), false);
+  const done = (await s("GET", "/api/admin/messages?status=done")).body.messages.find((m) => m.id === mine.id);
+  assert.equal(done.handledBy, "Staff Person");
+  assert.equal((await s("POST", "/api/admin/messages/999999", { handled: true })).status, 404);
 });
 
 test("report a problem on a locator or a listing -> staff review", async () => {
@@ -333,7 +346,7 @@ test("security basics: malformed cookies, unknown API routes, headers", async ()
 test("migrations and sample data run only once", async () => {
   assert.deepEqual(await migrate(db), [], "nothing left to apply");
   assert.equal(await seedProperties(db), 0, "sample listings aren't added twice");
-  assert.equal((await db.get("select count(*)::int as n from schema_migrations")).n, 1);
+  assert.equal((await db.get("select count(*)::int as n from schema_migrations")).n, 2);
   const rls = await db.all("select relname from pg_class where relkind = 'r' and relnamespace = 'public'::regnamespace and not relrowsecurity");
   assert.deepEqual(rls, [], "row-level security is on for every table");
 });
@@ -532,4 +545,63 @@ test("email: enquiries are replyable, and the hosted site fails loudly without a
   try {
     await assert.rejects(sendMail(db, { to: "x@example.com", subject: "s", text: "t" }), /No email provider/);
   } finally { delete process.env.VERCEL; }
+});
+
+test("without an email provider: accounts work straight away, the first one is the admin, messages still reach staff", async () => {
+  const d = await openDb("memory"); await migrate(d);
+  // An address left unconfirmed from a time when email was on.
+  await d.run("insert into users (email, name, password_hash) values ('leftover@x.com', 'Left Over', ?)", hashPassword("LeftoverPass1!Long"));
+  const srv = createApp(d, { distDir: "/nonexistent", uploadsDir: join(tmp, "uploads-noemail"), emailEnabled: false }).listen(0);
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  const visitor = () => {
+    const cookie = {};
+    return async (method, path, body) => {
+      const r = await fetch(url + path, { method, headers: { "content-type": "application/json", "x-requested-with": "findit", ...(cookie.v ? { cookie: cookie.v } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      const sc = r.headers.get("set-cookie"); if (sc) cookie.v = sc.split(";")[0];
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+  };
+  try {
+    const owner = visitor();
+    assert.equal((await owner("GET", "/api/auth/me")).body.emailOn, false);
+    const first = await owner("POST", "/api/auth/signup", { name: "Olive Owner", email: "owner@x.com", password: "OwnerPass1!Long" });
+    assert.equal(first.status, 201);
+    assert.equal(first.body.user.role, "staff", "the first account is the admin");
+    assert.equal(first.body.firstAdmin, true);
+    assert.equal((await owner("GET", "/api/auth/me")).body.user.email, "owner@x.com", "signed in without confirming anything");
+    const summary = await owner("GET", "/api/admin/summary");
+    assert.equal(summary.status, 200);
+    assert.equal(summary.body.emailOn, false);
+
+    const member = visitor();
+    const second = await member("POST", "/api/auth/signup", { name: "Mia Member", email: "mia@x.com", password: "MemberPass1!Long" });
+    assert.equal(second.body.user.role, "member");
+    assert.equal((await member("GET", "/api/admin/summary")).status, 403);
+    assert.equal((await member("PUT", "/api/favourites/properties/nope")).status, 404, "a member session is active");
+
+    // An address can't be registered twice, and nobody's password is replaced.
+    const again = await visitor()("POST", "/api/auth/signup", { name: "Not Olive", email: "owner@x.com", password: "StrangerPass1!Long" });
+    assert.equal(again.status, 409);
+    assert.equal((await visitor()("POST", "/api/auth/login", { email: "owner@x.com", password: "StrangerPass1!Long" })).status, 401);
+    assert.equal((await visitor()("POST", "/api/auth/login", { email: "owner@x.com", password: "OwnerPass1!Long" })).body.user.role, "staff");
+
+    // The unconfirmed leftover account can sign in now, as a member (an admin already exists).
+    const left = await visitor()("POST", "/api/auth/login", { email: "leftover@x.com", password: "LeftoverPass1!Long" });
+    assert.equal(left.status, 200);
+    assert.equal(left.body.user.role, "member");
+
+    // Nothing is emailed: no confirmation links, and password reset says so plainly.
+    assert.equal((await visitor()("POST", "/api/auth/forgot", { email: "owner@x.com" })).status, 503);
+    assert.match((await visitor()("POST", "/api/auth/resend", { email: "mia@x.com" })).body.message, /sign in straight away/);
+    assert.equal((await d.get("select count(*)::int as n from outbox")).n, 0);
+    assert.equal((await d.get("select count(*)::int as n from tokens")).n, 0);
+
+    // The contact form still works: the message waits in the staff console.
+    const sent = await visitor()("POST", "/api/contact", { name: "Rita Renter", email: "rita@x.com", topic: CONTACT_TOPICS[0], message: "Do you have anything near the Medical Center?" });
+    assert.equal(sent.status, 201);
+    const inbox = (await owner("GET", "/api/admin/messages")).body.messages;
+    assert.equal(inbox.length, 1);
+    assert.equal(inbox[0].email, "rita@x.com");
+    assert.equal((await d.get("select count(*)::int as n from outbox")).n, 0);
+  } finally { srv.close(); await d.close(); }
 });
