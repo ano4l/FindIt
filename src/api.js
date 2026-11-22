@@ -23,10 +23,13 @@ async function call(method, path, body, { raw } = {}) {
   }
   return data;
 }
+// Adds a query string when there is one. (URLSearchParams.size is missing in Safari before 17, so this
+// checks the text instead; otherwise filters would silently be dropped on older iPhones.)
+export const withQuery = (path, params) => { const s = params.toString(); return s ? `${path}?${s}` : path; };
 const q = (params) => {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) if (v !== undefined && v !== null && v !== "") p.set(k, v);
-  return p.size ? `?${p}` : "";
+  return withQuery("", p);
 };
 const id = encodeURIComponent;
 
@@ -69,6 +72,8 @@ export const api = {
     upload: (file) => call("POST", "/admin/uploads", undefined, { raw: file }),
     reports: (status = "open") => call("GET", `/admin/reports?status=${status}`),
     setReport: (rid, status) => call("POST", `/admin/reports/${rid}`, { status }),
+    messages: (status = "open") => call("GET", `/admin/messages?status=${status}`),
+    setMessage: (mid, handled) => call("POST", `/admin/messages/${mid}`, { handled }),
   },
 };
 

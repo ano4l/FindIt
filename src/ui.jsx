@@ -72,22 +72,44 @@ function Footer({ user }) {
         </div>
         <div className="footer-column"><strong>EXPLORE</strong><Link href="/apartments">Apartments</Link><Link href="/locators">Locators</Link><Link href="/how-it-works">How it works</Link><Link href="/pricing">Pricing</Link></div>
         <div className="footer-column"><strong>PARTNERS</strong><Link href="/for-owners">Owners &amp; managers</Link><Link href="/for-locators">Locators &amp; realtors</Link><Link href="/contact">Contact</Link></div>
-        <div className="footer-column"><strong>ACCOUNT</strong>{user ? <Link href={user.role === "staff" ? "/staff" : "/account"}>My account</Link> : <><Link href="/signin">Log in</Link><Link href="/signup">Join FindIt</Link></>}<Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></div>
+        <div className="footer-column"><strong>ACCOUNT</strong>{user ? <>{user.role === "staff" && <Link href="/staff">Staff console</Link>}<Link href="/account">My account</Link></> : <><Link href="/signin">Log in</Link><Link href="/signup">Join FindIt</Link></>}<Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></div>
       </div>
       <div className="page-shell footer-bottom"><span>© 2026 FindIt HTX</span><span>Listing details come from properties and partners. Always confirm with the property before you sign.</span></div>
     </footer>
   );
 }
 
-export function Shell({ children, user, count, signOut, route }) {
+export function Shell({ children, user, count, signOut, route, notice = "" }) {
   return (
     <>
       <a className="skip-link" href="#main">Skip to content</a>
       <Header user={user} count={count} signOut={signOut} route={route} />
       <div id="main" tabIndex={-1}>{children}</div>
       <Footer user={user} />
+      {notice && <p className="app-toast" role="alert">{notice}</p>}
     </>
   );
+}
+
+// Catches an unexpected error while drawing a page, so the visitor gets a message and a way back
+// instead of a blank screen.
+export class ErrorBoundary extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error) { console.error(error); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <main className="page-shell route-page">
+        <div className="empty-state">
+          <h2>Something went wrong on this page</h2>
+          <p>Reloading usually fixes it. If it keeps happening, please tell us through the contact page.</p>
+          <button className="button button-dark" onClick={() => window.location.reload()}>Reload the page</button>{" "}
+          <a className="button" href="/">Go to the home page</a>
+        </div>
+      </main>
+    );
+  }
 }
 
 /* --------------------------------------------------------- Components */

@@ -10,8 +10,12 @@
     "server": "node server/index.js",
     "dev:server": "node --watch server/index.js",
     "start": "NODE_ENV=production node server/index.js",
-    "staff": "node server/create-staff.js",
-    "backup": "node server/backup.js",
+    "staff": "node --env-file-if-exists=.env server/create-staff.js",
+    "set-password": "node --env-file-if-exists=.env server/set-password.js",
+    "backup": "node --env-file-if-exists=.env server/backup.js",
+    "db:setup": "node --env-file-if-exists=.env server/setup.js",
+    "db:seed": "node --env-file-if-exists=.env server/seed.js",
+    "restore": "node --env-file-if-exists=.env server/restore.js",
     "test": "node --test --test-force-exit server/api.test.js"
   },
   "dependencies": {
@@ -21,9 +25,13 @@
     "express": "^5.3.0",
     "lucide-react": "latest",
     "nodemailer": "^10.6.0",
+    "postgres": "^4.1.1",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16"
+  },
+  "packageManager": "pnpm@9.0.0+sha512.b4106707c7225b1748b61595953ccbebff97b54ad05d002aa3635f633b9c53cd666f7ce9b8bc44704f1fa048b9a49b55371ab2d9e9d667d1efe2ef1514bcd513"
 }

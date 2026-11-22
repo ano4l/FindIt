@@ -15,19 +15,29 @@ export function Brand({ onHome }) {
 }
 
 /* ---------------------------------------------------------------- Auth */
-// view: signin | signup | forgot | reset | verify | notice
-export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
-  const [view, setView] = useState(token ? (mode === "reset" ? "reset" : "verify") : mode);
+// view: signin | signup | forgot | reset | verify | resend | notice
+export function AuthScreen({ mode, token, emailOn = true, onMode, onHome, onSignedIn }) {
+  // A confirm or reset address opened without its token can't do anything, so it goes straight to the
+  // screen where a new link can be requested instead of waiting forever.
+  const broken = !token && (mode === "verify" || mode === "reset");
+  const [view, setView] = useState(token ? (mode === "reset" ? "reset" : "verify") : mode === "verify" ? "resend" : mode === "reset" ? "forgot" : mode);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(broken ? "That link is incomplete. Open it again from the email, or request a new one here." : "");
   const [notice, setNotice] = useState("");
   const [needsConfirm, setNeedsConfirm] = useState("");
 
   useEffect(() => {
     if (view !== "verify" || !token) return;
     api.verify(token)
-      .then(() => { window.history.replaceState(null, "", "/signin"); setNotice("Your email is confirmed. You can sign in now."); setView("signin"); })
-      .catch((e) => { setError(e.message); setView("signin"); });
+      .then((r) => {
+        window.history.replaceState(null, "", "/signin");
+        setNotice(r?.firstAdmin
+          ? "Your email is confirmed. This is the first account on FindIt, so it's the admin account. Sign in to open the staff console."
+          : "Your email is confirmed. You can sign in now.");
+        setView("signin");
+      })
+      // An expired or already-used link: offer a new one right here.
+      .catch((e) => { window.history.replaceState(null, "", "/resend-confirmation"); setError(e.message); setView("resend"); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (next) => { setError(""); setNotice(""); setNeedsConfirm(""); setView(next); onMode?.(next); };
@@ -39,12 +49,16 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
     try {
       if (view === "signup") {
         const r = await api.signup({ name: f.name, email: f.email, password: f.password });
+        // While confirmation emails are switched off the new account is signed in straight away.
+        if (r.user) { onSignedIn(r.user); return; }
         setNotice(r.message); setView("notice");
       } else if (view === "signin") {
         const { user } = await api.login({ email: f.email, password: f.password });
         onSignedIn(user);
       } else if (view === "forgot") {
         const r = await api.forgot(f.email); setNotice(r.message); setView("notice");
+      } else if (view === "resend") {
+        const r = await api.resend(f.email); setNotice(r.message); setView("notice");
       } else if (view === "reset") {
         await api.reset(token, f.password);
         window.history.replaceState(null, "", "/signin");
@@ -58,10 +72,13 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
 
   const copy = {
     signin: ["WELCOME BACK", "Sign in to FindIt", "Save apartments and locators, and pick up where you left off."],
-    signup: ["CREATE YOUR ACCOUNT", "Join FindIt", "Free to join. We'll email you a link to confirm your address. Enter your first and last name and create a strong password."],
+    signup: ["CREATE YOUR ACCOUNT", "Join FindIt", emailOn
+      ? "Free to join. We'll email you a link to confirm your address. Enter your first and last name and create a strong password."
+      : "Free to join. Enter your first and last name and create a strong password."],
     forgot: ["RESET PASSWORD", "Forgot your password?", "Enter your email and we'll send you a reset link."],
     reset: ["RESET PASSWORD", "Choose a new password", "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol."],
     verify: ["ONE MOMENT", "Confirming your email", "This only takes a second."],
+    resend: ["CONFIRM YOUR EMAIL", "Get a new confirmation link", "Enter the email you signed up with and we'll send a fresh link. Links work for 48 hours."],
     notice: ["CHECK YOUR EMAIL", "Check your inbox", ""],
   }[view];
   useEffect(() => { document.title = `${copy[1]} · FindIt HTX`; }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -90,11 +107,11 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
               Send a new confirmation link
             </button>
           )}
-          {["signin", "signup", "forgot", "reset"].includes(view) && (
+          {["signin", "signup", "forgot", "reset", "resend"].includes(view) && (
             <form className="auth-form" onSubmit={submit}>
               {view === "signup" && <label>Full name<input name="name" autoComplete="name" required minLength={3} maxLength={80} pattern="[^ ]+ +.+" title="Enter at least your first and last name." /></label>}
               {view !== "reset" && <label>Email address<input type="email" name="email" autoComplete="email" required maxLength={320} pattern="[^ @]+@[^ @]+[.][^ @]{2,}" title="Enter a valid email address, such as name@example.com." /></label>}
-              {view !== "forgot" && (
+              {view !== "forgot" && view !== "resend" && (
                 <label>{view === "reset" ? "New password" : "Password"}
                   <input type="password" name="password" required minLength={view === "signin" ? 1 : 12} maxLength={200}
                     pattern={view === "signin" ? undefined : "(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,}"}
@@ -104,19 +121,23 @@ export function AuthScreen({ mode, token, onMode, onHome, onSignedIn }) {
                 </label>
               )}
               <button className="button button-dark auth-submit" type="submit" disabled={busy}>
-                {busy ? "Please wait…" : { signin: "Sign in", signup: "Create account", forgot: "Send reset link", reset: "Save new password" }[view]}
+                {busy ? "Please wait…" : { signin: "Sign in", signup: "Create account", forgot: "Send reset link", reset: "Save new password", resend: "Send confirmation link" }[view]}
                 <ArrowRight size={16} />
               </button>
             </form>
           )}
-          {view === "signin" && <p className="auth-switch"><button onClick={() => go("forgot")}>Forgot password?</button></p>}
+          {view === "signin" && (emailOn
+            ? <p className="auth-switch"><button onClick={() => go("forgot")}>Forgot password?</button> · <button onClick={() => go("resend")}>Didn’t get a confirmation email?</button></p>
+            : <p className="auth-switch">Forgotten your password? <a href="/contact?topic=Account%20help">Send us a message</a> and we’ll help you back in.</p>)}
+          {view === "reset" && <p className="auth-switch"><button onClick={() => go("forgot")}>Request a new reset link</button></p>}
+          {view === "notice" && <p className="auth-switch">Nothing after a few minutes? Check your spam folder, or <button onClick={() => go("resend")}>send a new confirmation link</button>.</p>}
           {(view === "signin" || view === "signup") && (
             <p className="auth-switch">
               {view === "signup" ? "Already have an account?" : "New to FindIt?"}{" "}
               <button onClick={() => go(view === "signup" ? "signin" : "signup")}>{view === "signup" ? "Sign in" : "Create an account"}</button>
             </p>
           )}
-          {(view === "forgot" || view === "notice") && <p className="auth-switch"><button onClick={() => go("signin")}>Back to sign in</button></p>}
+          {(view === "forgot" || view === "notice" || view === "resend") && <p className="auth-switch"><button onClick={() => go("signin")}>Back to sign in</button></p>}
         </section>
       </div>
     </main>
@@ -134,7 +155,7 @@ function SavedRow({ image, title, sub, children }) {
   );
 }
 
-export function MemberAccount({ user, saved, savedError = "", onUnsave, onOpen, onHome, onSignOut }) {
+export function MemberAccount({ user, saved, savedError = "", savedLoading = false, onUnsave, onOpen, onHome, onSignOut }) {
   const [passwordState, setPasswordState] = useState({ busy: false, error: "", message: "" });
   useEffect(() => { document.title = "My account · FindIt HTX"; }, []);
   async function changePassword(event) {
@@ -150,6 +171,7 @@ export function MemberAccount({ user, saved, savedError = "", onUnsave, onOpen, 
       <header className="workspace-header">
         <Brand onHome={onHome} />
         <nav className="workspace-nav" aria-label="Account navigation">
+          {user.role === "staff" && <button className="workspace-back" onClick={() => onOpen("/staff")}>Staff console</button>}
           <button className="workspace-back" onClick={() => onOpen("/apartments")}>Apartments</button>
           <button className="workspace-back" onClick={() => onOpen("/locators")}>Locators</button>
           <button className="workspace-back" onClick={onSignOut}><LogOut size={15} /> Sign out</button>
@@ -158,10 +180,10 @@ export function MemberAccount({ user, saved, savedError = "", onUnsave, onOpen, 
       <section className="account-main">
         <h1>Hi, {user.name.split(" ")[0]}.</h1>
         <p className="account-sub">Signed in as {user.email}</p>
-        {savedError && <p className="form-error" role="alert">Could not load your saved items. {savedError}</p>}
+        {savedError && <p className="form-error" role="alert">We couldn’t load your saved places. {savedError} <button className="link-button" onClick={() => window.location.reload()}>Try again</button></p>}
 
-        <h2>Saved apartments ({properties.length})</h2>
-        {properties.length === 0 ? (
+        <h2>Saved apartments{savedLoading || savedError ? "" : ` (${properties.length})`}</h2>
+        {savedLoading ? <p role="status">Loading your saved apartments…</p> : savedError && properties.length === 0 ? null : properties.length === 0 ? (
           <div className="account-empty">
             <p>You haven't saved any apartments yet. Use the bookmark on a listing to keep it here.</p>
             <button className="button button-dark" onClick={() => onOpen("/apartments")}>Search apartments</button>
@@ -178,8 +200,8 @@ export function MemberAccount({ user, saved, savedError = "", onUnsave, onOpen, 
           </ul>
         )}
 
-        <h2 className="account-h2-gap">Saved locators ({locators.length})</h2>
-        {locators.length === 0 ? (
+        <h2 className="account-h2-gap">Saved locators{savedLoading || savedError ? "" : ` (${locators.length})`}</h2>
+        {savedLoading ? <p role="status">Loading your saved locators…</p> : savedError && locators.length === 0 ? null : locators.length === 0 ? (
           <div className="account-empty">
             <p>You haven't saved any locators yet.</p>
             <button className="button" onClick={() => onOpen("/locators")}>Find locators</button>

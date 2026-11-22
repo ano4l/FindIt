@@ -1,23 +1,25 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb, seedLocators, seedProperties } from "./db.js";
+import { gunzipSync } from "node:zlib";
+import { openDb, migrate, seedLocators, seedProperties, pruneExpired, exportTables, restoreTables, BACKUP_TABLES } from "./db.js";
 import { createApp } from "./app.js";
 import { hashPassword } from "./security.js";
+import { CONTACT_TOPICS } from "../shared/catalog.js";
 
 process.env.NODE_ENV = "test";
 let server, base, db, tmp;
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "findit-test-"));
-  db = openDb(":memory:"); seedLocators(db); seedProperties(db);
-  db.prepare("INSERT INTO users (email,name,password_hash,role,email_verified) VALUES ('staff@x.com','Staff Person',?,'staff',1)").run(hashPassword("staffpass1"));
+  // TEST_DATABASE_URL runs the suite against a real, empty Postgres (e.g. a throwaway Supabase branch).
+  db = await openDb(process.env.TEST_DATABASE_URL || "memory"); await migrate(db); await seedLocators(db); await seedProperties(db);
+  await db.run("insert into users (email,name,password_hash,role,email_verified) values ('staff@x.com','Staff Person',?,'staff',true)", hashPassword("staffpass1"));
   server = createApp(db, { distDir: "/nonexistent", uploadsDir: join(tmp, "uploads") }).listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 });
-after(() => { server.close(); rmSync(tmp, { recursive: true, force: true }); });
+after(async () => { server.close(); await db.close(); rmSync(tmp, { recursive: true, force: true }); });
 
 function client() {
   let cookie = "";
@@ -32,12 +34,12 @@ function client() {
     return { status: r.status, headers: r.headers, body: await r.json().catch(() => ({})) };
   };
 }
-const lastLink = (re) => db.prepare("SELECT body FROM outbox ORDER BY id DESC LIMIT 1").get().body.match(re)[1];
+const lastLink = async (re) => (await db.get("select body from outbox order by id desc limit 1")).body.match(re)[1];
 const staff = async () => { const s = client(); await s("POST", "/api/auth/login", { email: "staff@x.com", password: "staffpass1" }); return s; };
 async function member(email) {
   const c = client();
   await c("POST", "/api/auth/signup", { name: "Test Member", email, password: "MemberPass1!Long" });
-  await c("POST", "/api/auth/verify", { token: lastLink(/verify-email\?token=(\S+)/) });
+  await c("POST", "/api/auth/verify", { token: await lastLink(/verify-email\?token=(\S+)/) });
   await c("POST", "/api/auth/login", { email, password: "MemberPass1!Long" });
   return c;
 }
@@ -97,6 +99,12 @@ test("property search: location, beds, baths, price, move-in, availability, amen
   const page2 = await c("GET", "/api/properties?pageSize=5&page=3");
   assert.equal(page2.body.properties.length, 2); assert.equal(page2.body.total, 12);
   assert.equal((await c("GET", "/api/properties?q=nowhere-zzz")).body.total, 0);
+  // The search box suggests "Montrose, Houston or 77008": city, state and ZIP can be combined in any order.
+  assert.deepEqual(ids(await c("GET", "/api/properties?q=Montrose, Houston")), ["montrose-gardens"]);
+  assert.deepEqual(ids(await c("GET", "/api/properties?q=Houston, TX 77008")), ["yale-street-lofts"]);
+  assert.deepEqual(ids(await c("GET", "/api/properties?q=77008 houston")), ["yale-street-lofts"]);
+  assert.equal((await c("GET", "/api/properties?q=Houston, Texas")).body.total, 12);
+  assert.equal((await c("GET", "/api/locators?q=Houston, TX 77380")).body.locators.length, 2);
   assert.equal((await c("GET", "/api/properties?beds=banana&moveIn=not-a-date")).body.total, 12, "bad filter values are ignored");
 });
 
@@ -124,7 +132,7 @@ test("sign up -> must verify -> login -> favourites -> logout", async () => {
   assert.equal((await c("POST", "/api/auth/signup", { name: "Ann Lee", email: "Ann@Example.com", password: "GoodPass1!Long" })).status, 201);
   const early = await c("POST", "/api/auth/login", { email: "ann@example.com", password: "GoodPass1!Long" });
   assert.equal(early.status, 403); assert.equal(early.body.code, "email_not_verified");
-  const token = lastLink(/verify-email\?token=(\S+)/);
+  const token = await lastLink(/verify-email\?token=(\S+)/);
   assert.equal((await c("POST", "/api/auth/verify", { token: "nope" })).status, 400);
   assert.equal((await c("POST", "/api/auth/verify", { token })).status, 200);
   assert.equal((await c("POST", "/api/auth/verify", { token })).status, 400, "token is single use");
@@ -151,12 +159,12 @@ test("sign up -> must verify -> login -> favourites -> logout", async () => {
 test("forgot + reset password, old sessions end", async () => {
   const c = client(); const other = client();
   await c("POST", "/api/auth/signup", { name: "Bo Ray", email: "bo@example.com", password: "OriginalPass1!" });
-  await c("POST", "/api/auth/verify", { token: lastLink(/verify-email\?token=(\S+)/) });
+  await c("POST", "/api/auth/verify", { token: await lastLink(/verify-email\?token=(\S+)/) });
   await other("POST", "/api/auth/login", { email: "bo@example.com", password: "OriginalPass1!" });
   const unknown = await c("POST", "/api/auth/forgot", { email: "ghost@example.com" });
   assert.equal(unknown.status, 200, "same answer for unknown emails");
   await c("POST", "/api/auth/forgot", { email: "bo@example.com" });
-  const token = lastLink(/reset-password\?token=(\S+)/);
+  const token = await lastLink(/reset-password\?token=(\S+)/);
   assert.equal((await c("POST", "/api/auth/reset", { token, password: "short" })).status, 400);
   assert.equal((await c("POST", "/api/auth/reset", { token, password: "BrandNewPass1!" })).status, 200);
   assert.equal((await other("GET", "/api/auth/me")).body.user, null);
@@ -289,9 +297,22 @@ test("contact form validates and records a message", async () => {
   assert.equal((await anon("POST", "/api/contact", { name: "A", email: "bad", message: "hello" })).status, 400);
   const sent = await anon("POST", "/api/contact", { name: "Renter Name", email: "renter@example.com", topic: "List or update a property", message: "I have a question about the Houston directory." });
   assert.equal(sent.status, 201);
-  const mail = db.prepare("SELECT subject, body FROM outbox WHERE to_email = 'findit-inbox@localhost' ORDER BY id DESC LIMIT 1").get();
+  const mail = await db.get("select subject, body from outbox where to_email = 'findit-inbox@localhost' order by id desc limit 1");
   assert.match(mail.body, /renter@example\.com/);
   assert.match(mail.subject, /List or update a property/);
+  // The message is also kept for staff, who can mark it as dealt with.
+  assert.equal((await anon("GET", "/api/admin/messages")).status, 401);
+  const s = await staff();
+  const open = (await s("GET", "/api/admin/messages")).body.messages;
+  const mine = open.find((m) => m.email === "renter@example.com");
+  assert.equal(mine.topic, "List or update a property");
+  assert.match(mine.message, /Houston directory/);
+  assert.ok((await s("GET", "/api/admin/summary")).body.openMessages >= 1);
+  assert.equal((await s("POST", `/api/admin/messages/${mine.id}`, { handled: true })).status, 200);
+  assert.equal((await s("GET", "/api/admin/messages")).body.messages.some((m) => m.id === mine.id), false);
+  const done = (await s("GET", "/api/admin/messages?status=done")).body.messages.find((m) => m.id === mine.id);
+  assert.equal(done.handledBy, "Staff Person");
+  assert.equal((await s("POST", "/api/admin/messages/999999", { handled: true })).status, 404);
 });
 
 test("report a problem on a locator or a listing -> staff review", async () => {
@@ -322,24 +343,265 @@ test("security basics: malformed cookies, unknown API routes, headers", async ()
   assert.equal(h.headers.get("x-content-type-options"), "nosniff");
 });
 
-test("upgrading an older database keeps its reports", () => {
-  const file = join(tmp, "old.db");
-  const old = new DatabaseSync(file);
-  old.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'member', email_verified INTEGER NOT NULL DEFAULT 0, plan TEXT NOT NULL DEFAULT 'free', created_at TEXT NOT NULL DEFAULT '');
-    CREATE TABLE locators (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'hidden');
-    CREATE TABLE reports (id INTEGER PRIMARY KEY AUTOINCREMENT, locator_id TEXT NOT NULL REFERENCES locators(id), user_id INTEGER, reason TEXT NOT NULL,
-      details TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL DEFAULT '', resolved_by INTEGER, resolved_at TEXT);
-    INSERT INTO locators (id, name, status) VALUES ('old-one', 'Old One', 'published');
-    INSERT INTO reports (locator_id, reason) VALUES ('old-one', 'Other');`);
-  old.close();
-  const upgraded = openDb(file);
-  assert.equal(upgraded.prepare("PRAGMA user_version").get().user_version, 1);
-  assert.equal(upgraded.prepare("SELECT locator_id FROM reports").get().locator_id, "old-one");
-  assert.ok(upgraded.prepare("PRAGMA table_info(reports)").all().some((c) => c.name === "property_id"));
-  assert.equal(seedProperties(upgraded), 12);
-  upgraded.close();
-  const again = openDb(file);
-  assert.equal(again.prepare("SELECT COUNT(*) n FROM properties").get().n, 12, "reopening doesn't re-run migrations or reseed");
-  again.close();
+test("migrations and sample data run only once", async () => {
+  assert.deepEqual(await migrate(db), [], "nothing left to apply");
+  assert.equal(await seedProperties(db), 0, "sample listings aren't added twice");
+  assert.equal((await db.get("select count(*)::int as n from schema_migrations")).n, 2);
+  const rls = await db.all("select relname from pg_class where relkind = 'r' and relnamespace = 'public'::regnamespace and not relrowsecurity");
+  assert.deepEqual(rls, [], "row-level security is on for every table");
+});
+
+test("rate limits are shared and reset after the window", async () => {
+  const anon = client();
+  const body = { name: "Limit Test", email: "limit@example.com", message: "Checking the contact form limit." };
+  const statuses = [];
+  for (let i = 0; i < 6; i++) statuses.push((await anon("POST", "/api/contact", body)).status);
+  assert.ok(statuses.includes(429), `contact form is limited (got ${statuses.join(",")})`);
+  await db.run("update rate_limits set window_start = now() - interval '2 hours' where key like '%:contact'");
+  assert.equal((await anon("POST", "/api/contact", body)).status, 201, "a new window starts after the old one ends");
+});
+
+test("scheduled clean-up needs the cron secret and removes expired rows", async () => {
+  assert.equal((await fetch(base + "/api/cron/prune")).status, 404, "hidden when no secret is configured");
+  process.env.CRON_SECRET = "test-cron-secret";
+  try {
+    const u = await db.get("select id from users where email = 'staff@x.com'");
+    await db.run("insert into sessions (token_hash, user_id, expires_at) values ('expired-session', ?, now() - interval '1 minute')", u.id);
+    assert.equal((await fetch(base + "/api/cron/prune", { headers: { authorization: "Bearer wrong" } })).status, 404);
+    const r = await fetch(base + "/api/cron/prune", { headers: { authorization: "Bearer test-cron-secret" } });
+    assert.equal(r.status, 200);
+    assert.ok((await r.json()).removed.sessions >= 1);
+    assert.equal(await db.get("select 1 from sessions where token_hash = 'expired-session'"), undefined);
+    assert.deepEqual(Object.keys(await pruneExpired(db)), ["sessions", "tokens", "rateLimits", "outbox"]);
+  } finally { delete process.env.CRON_SECRET; }
+});
+
+test("nightly backup: needs the cron secret, saves every table, and restores into an empty database", async () => {
+  process.env.CRON_SECRET = "test-cron-secret";
+  const auth = { headers: { authorization: "Bearer test-cron-secret" } };
+  try {
+    assert.equal((await fetch(base + "/api/cron/backup")).status, 404);
+    // Without Supabase Storage (local development) there is nowhere private to keep it, so it's skipped.
+    assert.match((await (await fetch(base + "/api/cron/backup", auth)).json()).skipped, /Supabase Storage/);
+
+    // The same database behind an app whose storage records what it is given.
+    const saved = [];
+    const srv = createApp(db, { distDir: "/nonexistent", storage: { kind: "local", dir: join(tmp, "uploads"), put: async () => "", putBackup: async (name, body) => { saved.push({ name, body }); } } }).listen(0);
+    try {
+      const r = await (await fetch(`http://127.0.0.1:${srv.address().port}/api/cron/backup`, auth)).json();
+      assert.equal(r.ok, true);
+      assert.match(r.file, /^findit-day-\d\d\.json\.gz$/, "one file per day of the month, so about 30 days are kept");
+      assert.deepEqual(Object.keys(r.rows), BACKUP_TABLES);
+      assert.ok(r.rows.users >= 1 && r.rows.properties >= 12 && r.rows.locators >= 6);
+      assert.equal(saved.length, 1);
+      assert.equal(saved[0].name, r.file);
+      assert.equal(saved[0].body.length, r.bytes);
+    } finally { srv.close(); }
+
+    // Restore the saved file into a brand-new database and compare it with the original, table by table.
+    const backup = JSON.parse(gunzipSync(saved[0].body).toString("utf8"));
+    const fresh = await openDb("memory"); await migrate(fresh);
+    try {
+      const counts = await restoreTables(fresh, backup);
+      assert.deepEqual(counts, Object.fromEntries(BACKUP_TABLES.map((t) => [t, backup.tables[t].length])));
+      const asJson = (x) => JSON.parse(JSON.stringify(x.tables));
+      assert.deepEqual(asJson(await exportTables(fresh)), asJson(await exportTables(db)));
+      // New rows get fresh ids instead of colliding with restored ones.
+      const maxId = (await fresh.get("select max(id) as n from users")).n;
+      const added = await fresh.get("insert into users (email, name, password_hash) values ('after-restore@x.com', 'After Restore', 'x') returning id");
+      assert.ok(added.id > maxId);
+      await assert.rejects(restoreTables(fresh, backup), /already has rows/, "never overwrites a database that has data");
+    } finally { await fresh.close(); }
+  } finally { delete process.env.CRON_SECRET; }
+});
+
+test("the first account to confirm its email becomes the admin; later accounts are members", async () => {
+  // Its own empty database: the shared one already has a staff account.
+  const d = await openDb("memory"); await migrate(d);
+  const srv = createApp(d, { distDir: "/nonexistent", uploadsDir: join(tmp, "uploads-first") }).listen(0);
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  const call = (cookie) => async (method, path, body) => {
+    const r = await fetch(url + path, { method, headers: { "content-type": "application/json", "x-requested-with": "findit", ...(cookie.v ? { cookie: cookie.v } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    const sc = r.headers.get("set-cookie"); if (sc) cookie.v = sc.split(";")[0];
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  };
+  const link = async (email, re) => (await d.get("select body from outbox where to_email = ? order by id desc limit 1", email)).body.match(re)[1];
+  const signUp = async (email) => { const c = call({}); await c("POST", "/api/auth/signup", { name: "First Person", email, password: "FirstPass1!Long" }); return c; };
+  const confirm = async (c, email) => c("POST", "/api/auth/verify", { token: await link(email, /verify-email\?token=(\S+)/) });
+  try {
+    // Signing up alone changes nothing: an address nobody confirms can't take the admin slot.
+    const ghost = await signUp("never-confirms@x.com");
+    assert.equal((await d.get("select role from users where email = 'never-confirms@x.com'")).role, "member");
+
+    const owner = await signUp("owner@x.com");
+    const first = await confirm(owner, "owner@x.com");
+    assert.equal(first.body.firstAdmin, true);
+    const login = await owner("POST", "/api/auth/login", { email: "owner@x.com", password: "FirstPass1!Long" });
+    assert.equal(login.body.user.role, "staff");
+    assert.equal((await owner("GET", "/api/admin/summary")).status, 200, "the admin can open the staff tools");
+    const log = (await owner("GET", "/api/admin/activity")).body.activity;
+    assert.ok(log.some((a) => a.action === "admin" && a.targetId === "owner@x.com"), "recorded in the activity log");
+
+    const second = await signUp("second@x.com");
+    assert.equal((await confirm(second, "second@x.com")).body.firstAdmin, false);
+    assert.equal((await second("POST", "/api/auth/login", { email: "second@x.com", password: "FirstPass1!Long" })).body.user.role, "member");
+    assert.equal((await second("GET", "/api/admin/summary")).status, 403);
+
+    // Confirming late, or through a password-reset link, never promotes anyone once an admin exists.
+    assert.equal((await confirm(ghost, "never-confirms@x.com")).body.firstAdmin, false);
+    const late = await signUp("late@x.com");
+    await late("POST", "/api/auth/forgot", { email: "late@x.com" });
+    assert.equal((await late("POST", "/api/auth/reset", { token: await link("late@x.com", /reset-password\?token=(\S+)/), password: "AnotherPass1!Long" })).status, 200);
+    assert.deepEqual(await d.all("select email, role, email_verified from users order by id"), [
+      { email: "never-confirms@x.com", role: "member", email_verified: true },
+      { email: "owner@x.com", role: "staff", email_verified: true },
+      { email: "second@x.com", role: "member", email_verified: true },
+      { email: "late@x.com", role: "member", email_verified: true },
+    ]);
+
+    // Two confirmations arriving together on an empty site: exactly one becomes admin.
+    await d.run("delete from users");
+    const a = await signUp("race-a@x.com"), b = await signUp("race-b@x.com");
+    const both = await Promise.all([confirm(a, "race-a@x.com"), confirm(b, "race-b@x.com")]);
+    assert.equal(both.filter((r) => r.body.firstAdmin).length, 1);
+    assert.equal((await d.get("select count(*)::int as n from users where role = 'staff'")).n, 1);
+  } finally { srv.close(); await d.close(); }
+});
+
+test("signing up again before confirming replaces the earlier password", async () => {
+  // Someone registers an address they don't own, hoping the real owner confirms it later.
+  const stranger = client(), owner = client();
+  await stranger("POST", "/api/auth/signup", { name: "Not Them", email: "taken@example.com", password: "StrangerPass1!Long" });
+  const oldToken = await lastLink(/verify-email\?token=(\S+)/);
+  await owner("POST", "/api/auth/signup", { name: "Real Owner", email: "taken@example.com", password: "OwnerPass1!Long" });
+  assert.equal((await owner("POST", "/api/auth/verify", { token: oldToken })).status, 400, "the earlier link stops working");
+  assert.equal((await owner("POST", "/api/auth/verify", { token: await lastLink(/verify-email\?token=(\S+)/) })).status, 200);
+  assert.equal((await stranger("POST", "/api/auth/login", { email: "taken@example.com", password: "StrangerPass1!Long" })).status, 401);
+  const ok = await owner("POST", "/api/auth/login", { email: "taken@example.com", password: "OwnerPass1!Long" });
+  assert.equal(ok.body.user.name, "Real Owner");
+  // Once confirmed, another sign-up with the same address changes nothing.
+  await stranger("POST", "/api/auth/signup", { name: "Not Them", email: "taken@example.com", password: "StrangerPass1!Long" });
+  assert.equal((await stranger("POST", "/api/auth/login", { email: "taken@example.com", password: "StrangerPass1!Long" })).status, 401);
+  assert.equal((await client()("POST", "/api/auth/login", { email: "taken@example.com", password: "OwnerPass1!Long" })).status, 200);
+});
+
+test("listing details stay accurate: availability notes, unchecked listings, linked locators", async () => {
+  const anon = client(), s = await staff();
+  const made = async (body) => (await s("POST", "/api/admin/properties", { publish: true, ...body })).body.property;
+
+  // A listing nobody has checked isn't stamped as checked.
+  const unknown = await made({ name: "Unchecked Court" });
+  assert.equal(unknown.availability, "unknown");
+  assert.equal(unknown.availabilityCheckedAt, null);
+  assert.equal((await anon("GET", `/api/properties/${unknown.id}`)).body.property.availabilityStale, true);
+
+  // Quick status change: the note written for the old status is cleared; confirming the same status keeps it.
+  const noted = await made({ name: "Noted Place", availability: "available", availabilityNote: "Seven homes available now" });
+  const same = await s("POST", `/api/admin/properties/${noted.id}/availability`, { availability: "available" });
+  assert.equal(same.body.property.availabilityNote, "Seven homes available now");
+  const changed = await s("POST", `/api/admin/properties/${noted.id}/availability`, { availability: "unavailable" });
+  assert.equal(changed.body.property.availability, "unavailable");
+  assert.equal(changed.body.property.availabilityNote, "");
+
+  // A hidden locator is never named in public listing data; a removed one is unlinked so the listing can still be edited.
+  const loc = (await s("POST", "/api/admin/locators", { name: "Temp Locator", company: "Temp Co", area: "Midtown", listingsUrl: "https://example.com/temp", publish: true })).body.locator;
+  assert.ok(loc?.id, "locator created");
+  const linked = await made({ name: "Linked Lofts", locatorId: loc.id });
+  const inSearch = async () => (await anon("GET", "/api/properties?q=linked lofts")).body.properties[0];
+  assert.equal((await inSearch()).locatorId, loc.id);
+  await s("POST", `/api/admin/locators/${loc.id}/status`, { status: "hidden" });
+  assert.equal((await inSearch()).locatorId, "");
+  const detail = (await anon("GET", `/api/properties/${linked.id}`)).body;
+  assert.equal(detail.property.locatorId, "");
+  assert.equal(detail.locator, null);
+  await s("POST", `/api/admin/locators/${loc.id}/status`, { status: "removed" });
+  const form = (await s("GET", `/api/admin/properties/${linked.id}`)).body.property;
+  assert.equal(form.locatorId, "", "removing a locator unlinks it");
+  const saved = await s("PUT", `/api/admin/properties/${linked.id}`, { ...form, parking: "Garage" });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.property.parking, "Garage");
+
+  for (const p of [unknown, noted, linked]) await s("POST", `/api/admin/properties/${p.id}/status`, { status: "removed" });
+});
+
+test("email: enquiries are replyable, and the hosted site fails loudly without a provider", async () => {
+  const c = client();
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  process.env.RESEND_API_KEY = "re_test";
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith("https://api.resend.com/")) { sent.push(JSON.parse(init.body)); return new Response("{}", { status: 200 }); }
+    return realFetch(url, init);
+  };
+  try {
+    const r = await c("POST", "/api/contact", { name: "Rita Renter", email: "rita@example.com", topic: CONTACT_TOPICS[0], message: "Is Yale Street Lofts still available in March?" });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].reply_to, "rita@example.com", "replying goes to the person who wrote, not the no-reply address");
+  } finally { globalThis.fetch = realFetch; delete process.env.RESEND_API_KEY; }
+
+  const { sendMail } = await import("./mailer.js");
+  process.env.VERCEL = "1";
+  try {
+    await assert.rejects(sendMail(db, { to: "x@example.com", subject: "s", text: "t" }), /No email provider/);
+  } finally { delete process.env.VERCEL; }
+});
+
+test("without an email provider: accounts work straight away, the first one is the admin, messages still reach staff", async () => {
+  const d = await openDb("memory"); await migrate(d);
+  // An address left unconfirmed from a time when email was on.
+  await d.run("insert into users (email, name, password_hash) values ('leftover@x.com', 'Left Over', ?)", hashPassword("LeftoverPass1!Long"));
+  const srv = createApp(d, { distDir: "/nonexistent", uploadsDir: join(tmp, "uploads-noemail"), emailEnabled: false }).listen(0);
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  const visitor = () => {
+    const cookie = {};
+    return async (method, path, body) => {
+      const r = await fetch(url + path, { method, headers: { "content-type": "application/json", "x-requested-with": "findit", ...(cookie.v ? { cookie: cookie.v } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      const sc = r.headers.get("set-cookie"); if (sc) cookie.v = sc.split(";")[0];
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+  };
+  try {
+    const owner = visitor();
+    assert.equal((await owner("GET", "/api/auth/me")).body.emailOn, false);
+    const first = await owner("POST", "/api/auth/signup", { name: "Olive Owner", email: "owner@x.com", password: "OwnerPass1!Long" });
+    assert.equal(first.status, 201);
+    assert.equal(first.body.user.role, "staff", "the first account is the admin");
+    assert.equal(first.body.firstAdmin, true);
+    assert.equal((await owner("GET", "/api/auth/me")).body.user.email, "owner@x.com", "signed in without confirming anything");
+    const summary = await owner("GET", "/api/admin/summary");
+    assert.equal(summary.status, 200);
+    assert.equal(summary.body.emailOn, false);
+
+    const member = visitor();
+    const second = await member("POST", "/api/auth/signup", { name: "Mia Member", email: "mia@x.com", password: "MemberPass1!Long" });
+    assert.equal(second.body.user.role, "member");
+    assert.equal((await member("GET", "/api/admin/summary")).status, 403);
+    assert.equal((await member("PUT", "/api/favourites/properties/nope")).status, 404, "a member session is active");
+
+    // An address can't be registered twice, and nobody's password is replaced.
+    const again = await visitor()("POST", "/api/auth/signup", { name: "Not Olive", email: "owner@x.com", password: "StrangerPass1!Long" });
+    assert.equal(again.status, 409);
+    assert.equal((await visitor()("POST", "/api/auth/login", { email: "owner@x.com", password: "StrangerPass1!Long" })).status, 401);
+    assert.equal((await visitor()("POST", "/api/auth/login", { email: "owner@x.com", password: "OwnerPass1!Long" })).body.user.role, "staff");
+
+    // The unconfirmed leftover account can sign in now, as a member (an admin already exists).
+    const left = await visitor()("POST", "/api/auth/login", { email: "leftover@x.com", password: "LeftoverPass1!Long" });
+    assert.equal(left.status, 200);
+    assert.equal(left.body.user.role, "member");
+
+    // Nothing is emailed: no confirmation links, and password reset says so plainly.
+    assert.equal((await visitor()("POST", "/api/auth/forgot", { email: "owner@x.com" })).status, 503);
+    assert.match((await visitor()("POST", "/api/auth/resend", { email: "mia@x.com" })).body.message, /sign in straight away/);
+    assert.equal((await d.get("select count(*)::int as n from outbox")).n, 0);
+    assert.equal((await d.get("select count(*)::int as n from tokens")).n, 0);
+
+    // The contact form still works: the message waits in the staff console.
+    const sent = await visitor()("POST", "/api/contact", { name: "Rita Renter", email: "rita@x.com", topic: CONTACT_TOPICS[0], message: "Do you have anything near the Medical Center?" });
+    assert.equal(sent.status, 201);
+    const inbox = (await owner("GET", "/api/admin/messages")).body.messages;
+    assert.equal(inbox.length, 1);
+    assert.equal(inbox[0].email, "rita@x.com");
+    assert.equal((await d.get("select count(*)::int as n from outbox")).n, 0);
+  } finally { srv.close(); await d.close(); }
 });

@@ -16,21 +16,21 @@ export function verifyPassword(password, stored) {
 export const newToken = () => randomBytes(32).toString("base64url");
 export const hashToken = (t) => createHash("sha256").update(String(t)).digest("hex");
 
-// Small in-memory limiter. Fine for one server process; use a shared store if you scale out.
-// `name` groups routes into one bucket (e.g. every report endpoint shares "report").
-export function rateLimit({ name, windowMs, max }) {
-  const hits = new Map();
-  return (req, res, next) => {
+// Fixed-window rate limit stored in the database, so it holds across serverless instances.
+// `name` groups routes into one bucket (e.g. every report endpoint shares "report"); without it each path is its own bucket.
+export function rateLimit(db, { name, windowMs, max }) {
+  const secs = windowMs / 1000;
+  return async (req, res, next) => {
     const key = `${req.ip}:${name || req.path}`;
-    const now = Date.now();
-    const recent = (hits.get(key) || []).filter((t) => now - t < windowMs);
-    if (recent.length >= max) {
-      res.setHeader("Retry-After", Math.ceil(windowMs / 1000));
+    const row = await db.get(`insert into rate_limits (key, window_start, hits) values (?, now(), 1)
+      on conflict (key) do update set
+        hits = case when rate_limits.window_start < now() - make_interval(secs => ?) then 1 else rate_limits.hits + 1 end,
+        window_start = case when rate_limits.window_start < now() - make_interval(secs => ?) then now() else rate_limits.window_start end
+      returning hits`, key, secs, secs);
+    if (row.hits > max) {
+      res.setHeader("Retry-After", Math.ceil(secs));
       return res.status(429).json({ error: "Too many attempts. Please wait a few minutes and try again." });
     }
-    recent.push(now);
-    hits.set(key, recent);
-    if (hits.size > 5000) for (const [k, v] of hits) if (!v.some((t) => now - t < windowMs)) hits.delete(k);
     next();
   };
 }
