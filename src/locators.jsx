@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, ExternalLink, MapPin, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, CloudOff, ExternalLink, MapPin, Search } from "lucide-react";
 import { LOCATOR_REPORT_REASONS } from "../shared/catalog.js";
 import { api, formatDate, withQuery } from "./api.js";
-import { EmptyState, Link, Photo, ReportForm, SaveButton, go, usePageTitle } from "./ui.jsx";
+import { EmptyState, Link, Photo, ReportForm, SaveButton, breakableEmail, go, usePageTitle } from "./ui.jsx";
 import { PropertyCard } from "./properties.jsx";
 
 const SPECIALTIES = ["Luxury", "High-rises", "Relocation", "Student housing", "Corporate", "Pet friendly", "First-time renters", "New construction", "Medical professionals", "Families", "Short-term"];
@@ -76,7 +76,7 @@ export function LocatorsPage({ search, isSaved, onSave }) {
         </label>
       </div>
       {state.status === "loading" ? <p role="status">Loading locators…</p>
-        : state.status === "error" ? <EmptyState title="Directory unavailable" action={<button className="button" onClick={() => window.location.reload()}>Try again</button>}>{state.error}</EmptyState>
+        : state.status === "error" ? <EmptyState icon={<CloudOff size={22} />} title="Directory unavailable" action={<button className="button" onClick={() => window.location.reload()}>Try again</button>}>{state.error}</EmptyState>
         : state.items.length ? <div className="locator-grid">{state.items.map((l) => <LocatorCard key={l.id} locator={l} saved={isSaved(l.id)} onSave={onSave} />)}</div>
         : <EmptyState title="No locators found" action={<Link className="button button-dark" href="/locators">Clear search</Link>}>Try a different neighborhood, ZIP code or specialty.</EmptyState>}
     </main>
@@ -96,13 +96,13 @@ export function LocatorProfilePage({ id, isSaved, onSave, isPropertySaved, onSav
   if (state.status === "loading") return <main className="page-shell route-page"><p role="status">Loading profile…</p></main>;
   if (state.status !== "ready") return (
     <main className="page-shell route-page">
-      <EmptyState title="This profile isn’t available" action={<Link className="button button-dark" href="/locators">Back to the directory</Link>}>
+      <EmptyState icon={state.status === "error" ? <CloudOff size={22} /> : undefined} title="This profile isn’t available" action={<Link className="button button-dark" href="/locators">Back to the directory</Link>}>
         {state.status === "error" ? state.error : "It may have been removed or the link may be incorrect."}
       </EmptyState>
     </main>
   );
   const { locator: profile, properties = [] } = state;
-  const row = (label, value) => <p><strong>{label}:</strong> {value || "Not provided"}</p>;
+  const row = (label, value) => <p className="profile-row"><strong>{label}:</strong> <span>{value || "Not provided"}</span></p>;
   return (
     <main className="page-shell route-page">
       <article className="profile-page">
@@ -114,7 +114,7 @@ export function LocatorProfilePage({ id, isSaved, onSave, isPropertySaved, onSav
             <div className="profile-title-row"><h1>{profile.name || "Name not provided"}</h1><SaveButton saved={isSaved(profile.id)} onClick={() => onSave(profile)} label={profile.name} className="button save-wide" /></div>
             {profile.source === "Sample data" && <p className="sample-banner">Sample profile for the FindIt beta. This is not a real person.</p>}
             <p className="company-name">{profile.company || "Company not provided"}</p>
-            <p>{profile.about || "About information not provided."}</p>
+            <p className="profile-about">{profile.about || "About information not provided."}</p>
             {row("Main area", profile.area)}
             {row("Travels", profile.radius)}
             {row("Areas served", profile.serviceAreas?.join(", "))}
@@ -123,7 +123,7 @@ export function LocatorProfilePage({ id, isSaved, onSave, isPropertySaved, onSav
             {row("Languages", profile.languages?.join(", "))}
             {row("Experience", profile.years != null ? `${profile.years} year${profile.years === 1 ? "" : "s"}` : "")}
             {row("Typical response", profile.response)}
-            <p><strong>Contact:</strong> {profile.contactEmail || profile.contactPhone ? <>{profile.contactEmail && <a href={`mailto:${profile.contactEmail}`}>{profile.contactEmail}</a>}{profile.contactEmail && profile.contactPhone ? " · " : ""}{profile.contactPhone && <a href={`tel:${profile.contactPhone.replace(/[^\d+]/g, "")}`}>{profile.contactPhone}</a>}</> : "Not provided"}</p>
+            <p className="profile-row profile-contact"><strong>Contact:</strong> <span>{profile.contactEmail || profile.contactPhone ? <>{profile.contactEmail && <a href={`mailto:${profile.contactEmail}`}>{breakableEmail(profile.contactEmail)}</a>}{profile.contactEmail && profile.contactPhone ? " · " : ""}{profile.contactPhone && <a href={`tel:${profile.contactPhone.replace(/[^\d+]/g, "")}`}>{profile.contactPhone}</a>}</> : "Not provided"}</span></p>
             <p className="provenance">Source: <strong>{profile.source || "Not stated"}</strong> · Last updated {formatDate(profile.lastUpdated)}</p>
             {profile.listingsUrl ? <a className="button button-dark" href={profile.listingsUrl} target="_blank" rel="noopener noreferrer">View their listings <ExternalLink size={15} /></a> : <p>Listings link: Not provided</p>}
             <ReportForm reasons={LOCATOR_REPORT_REASONS} onSubmit={(b) => api.report(profile.id, b)} label="Report a problem with this profile" />

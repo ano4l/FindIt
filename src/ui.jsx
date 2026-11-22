@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, Bookmark, House, MapPin, Menu, X } from "lucide-react";
-import { AVAILABILITY, bedsLabel, money } from "../shared/catalog.js";
+import { AlertTriangle, ArrowRight, Bookmark, House, MapPin, Menu, SearchX, X } from "lucide-react";
+import { AVAILABILITY, STALE_DAYS, bedsLabel, isStale, money } from "../shared/catalog.js";
+import { daysAgo } from "./api.js";
 
 /* ------------------------------------------------------------ Routing */
 export const pathNow = () => window.location.pathname;
@@ -31,16 +32,36 @@ const NAV = [["Apartments", "/apartments"], ["Locators", "/locators"], ["How it 
 
 function Header({ user, count, signOut, route }) {
   const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   useEffect(() => setOpen(false), [route]);
+  // Once the page has moved, the sticky header gets a soft shadow so it reads as sitting above the content.
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  // Escape closes the phone menu.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   return (
-    <header className="site-header">
+    <header className={`site-header ${scrolled ? "is-scrolled" : ""} ${open ? "is-menu-open" : ""}`}>
       <div className="nav-shell">
         <Link className="brand" href="/" aria-label="FindIt HTX home"><span className="brand-mark"><House size={21} strokeWidth={3} /></span><span>FINDIT<span className="brand-period">.</span></span><span className="brand-city">HTX</span></Link>
         <nav className={`main-nav ${open ? "is-open" : ""}`} aria-label="Main navigation">
           {NAV.map(([label, href]) => (
             <Link key={href} href={href} className={route === href || route.startsWith(`${href}/`) ? "nav-active" : undefined} aria-current={route === href ? "page" : undefined}>{label}</Link>
           ))}
-          {user && <button type="button" className="nav-mobile-only" onClick={signOut}>Log out</button>}
+          {user ? <button type="button" className="nav-mobile-only" onClick={signOut}>Log out</button> : (
+            <div className="nav-menu-account">
+              <Link className="button" href="/signin">Log in</Link>
+              <Link className="button button-dark" href="/signup">Join FindIt <ArrowRight size={15} /></Link>
+            </div>
+          )}
         </nav>
         <div className="nav-actions">
           {user ? (
@@ -124,6 +145,37 @@ export function AvailabilityBadge({ value, className = "" }) {
   return <span className={`avail avail-${value} ${className}`}>{AVAILABILITY[value] || AVAILABILITY.unknown}</span>;
 }
 
+// The freshness signal: one chip that says how recently availability was checked. It is used on listing
+// cards, the listing page, saved items and the staff table, and only restates what the page already knows
+// (the last check and whether it is past the stale threshold). Fresh = checked within the last 3 days.
+const FRESH_DAYS = 3;
+export function Freshness({ checkedAt, stale, lead = "Availability checked", none = "Availability not yet checked", className = "" }) {
+  const days = checkedAt ? Math.floor((Date.now() - new Date(checkedAt).getTime()) / 86400000) : null;
+  const old = stale ?? isStale(checkedAt);
+  const state = days == null || old ? "stale" : days <= FRESH_DAYS ? "fresh" : "aging";
+  const hint = days == null ? "No availability check has been recorded yet" : old ? `Not checked in the last ${STALE_DAYS} days. Confirm with the property.` : undefined;
+  const label = days == null ? none : `${lead} ${daysAgo(checkedAt)}`;
+  // The same label without its leading "Availability". The stylesheet shows it instead of the full sentence
+  // where the chip's container is too narrow, so the chip always stays on one line. Screen readers get the full label.
+  const brief = label.startsWith("Availability ") ? label.charAt(13).toUpperCase() + label.slice(14) : "";
+  return (
+    <span className={`fresh fresh-${state} ${brief ? "fresh-swaps" : ""} ${className}`} title={hint}>
+      {state === "stale" ? <AlertTriangle size={12} aria-hidden="true" /> : <span className="fresh-dot" aria-hidden="true" />}
+      <span className="fresh-text">{label}</span>
+      {brief && <span className="fresh-brief" aria-hidden="true">{brief}</span>}
+      {days != null && old && <span className="visually-hidden"> (needs re-check)</span>}
+    </span>
+  );
+}
+
+// A long email address wraps after "@" first, then after a dot, and never in the middle of a word.
+export function breakableEmail(email) {
+  const at = email.lastIndexOf("@");
+  if (at < 0) return email;
+  const afterDots = (text) => text.split(".").map((part, i) => (i ? <React.Fragment key={i}>.<wbr />{part}</React.Fragment> : part));
+  return <>{afterDots(email.slice(0, at))}@<wbr /><span className="email-domain">{afterDots(email.slice(at + 1))}</span></>;
+}
+
 export function SaveButton({ saved, onClick, label, className = "save-button" }) {
   return (
     <button type="button" className={`${className} ${saved ? "is-saved" : ""}`} onClick={onClick} aria-pressed={saved} aria-label={saved ? `Remove ${label} from saved` : `Save ${label}`}>
@@ -154,15 +206,15 @@ export function ReportForm({ reasons, onSubmit, label = "Report a problem with t
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="report-actions">
           <button type="button" className="link-button" onClick={() => setOpen(false)}>Cancel</button>
-          <button className="button button-dark" disabled={busy}>{busy ? "Sending…" : "Send report"}</button>
+          <button className="button button-dark" disabled={busy} aria-busy={busy}>{busy ? "Sending…" : "Send report"}</button>
         </div>
       </form>
     </div>
   );
 }
 
-export function EmptyState({ title, children, action }) {
-  return <div className="empty-state"><h2>{title}</h2>{children && <p>{children}</p>}{action}</div>;
+export function EmptyState({ title, children, action, icon }) {
+  return <div className="empty-state"><span className="empty-icon" aria-hidden="true">{icon || <SearchX size={22} />}</span><h2>{title}</h2>{children && <p>{children}</p>}{action}</div>;
 }
 
 /* ------------------------------------------------------- Text helpers */

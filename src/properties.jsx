@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, BedDouble, Bath, Car, Check, ExternalLink, Gift, Mail, MapPin, PawPrint,
-  Phone, Ruler, Search, SlidersHorizontal, X, CalendarDays, Globe,
+  AlertTriangle, ArrowLeft, ArrowRight, BedDouble, Bath, Car, Check, ChevronLeft, ChevronRight, CloudOff, ExternalLink, Gift, Mail,
+  MapPin, PawPrint, Phone, Ruler, Search, SlidersHorizontal, X, CalendarDays, Globe,
 } from "lucide-react";
 import { AMENITIES, AVAILABILITY, PETS, PROPERTY_REPORT_REASONS, NEIGHBORHOODS, bedsLabel, money } from "../shared/catalog.js";
 import { api, formatDate, formatDay, daysAgo, withQuery } from "./api.js";
 import {
-  AvailabilityBadge, EmptyState, Link, Photo, ReportForm, SaveButton, go, session, usePageTitle,
+  AvailabilityBadge, EmptyState, Freshness, Link, Photo, ReportForm, SaveButton, breakableEmail, go, session, usePageTitle,
   bathsText, bedsText, priceText, sqftText,
 } from "./ui.jsx";
 
@@ -37,10 +37,7 @@ export function PropertyCard({ property: p, saved, onSave }) {
         {p.match && <p className="prop-card-match">{p.match.plans} matching floor plan{p.match.plans === 1 ? "" : "s"}</p>}
         {p.incentives && <p className="prop-card-deal"><Gift size={13} /> {p.incentives}</p>}
         <div className="tag-row">{p.amenities.slice(0, 3).map((a) => <span className="tag" key={a}>{a}</span>)}</div>
-        <p className={`prop-card-updated ${p.availabilityStale ? "is-stale" : ""}`}>
-          {p.availabilityStale ? <AlertTriangle size={12} /> : <Check size={12} />}
-          {p.availabilityCheckedAt ? `Availability checked ${daysAgo(p.availabilityCheckedAt)}` : "Availability not yet checked"}
-        </p>
+        <p className="prop-card-updated"><Freshness checkedAt={p.availabilityCheckedAt} stale={p.availabilityStale} /></p>
       </div>
     </article>
   );
@@ -197,7 +194,7 @@ export function ApartmentsPage({ search, isSaved, onSave }) {
             </div>
           )}
           {state.status === "error" ? (
-            <EmptyState title="We couldn’t load apartments" action={<button className="button button-dark" onClick={() => setAttempt((n) => n + 1)}>Try again</button>}>{state.error}</EmptyState>
+            <EmptyState icon={<CloudOff size={22} />} title="We couldn’t load apartments" action={<button className="button button-dark" onClick={() => setAttempt((n) => n + 1)}>Try again</button>}>{state.error}</EmptyState>
           ) : state.status === "loading" && !state.items.length ? (
             <div className="prop-grid" aria-hidden="true">{[0, 1, 2].map((i) => <div className="prop-card skeleton" key={i} />)}</div>
           ) : state.items.length === 0 ? (
@@ -212,7 +209,7 @@ export function ApartmentsPage({ search, isSaved, onSave }) {
               {state.items.length < state.total && (
                 <div className="load-more">
                   {moreError && <p className="form-error" role="alert">We couldn’t load more apartments. {moreError}</p>}
-                  <button className="button" onClick={loadMore} disabled={moreBusy}>{moreBusy ? "Loading…" : moreError ? "Try again" : `Show more (${state.total - state.items.length} more)`}</button>
+                  <button className="button" onClick={loadMore} disabled={moreBusy} aria-busy={moreBusy}>{moreBusy ? "Loading…" : moreError ? "Try again" : `Show more (${state.total - state.items.length} more)`}</button>
                 </div>
               )}
               <p className="results-note">Availability and prices come from properties and partners and can change quickly. Each listing shows when it was last checked.</p>
@@ -238,12 +235,37 @@ const planRent = (p) => (p.rentMin == null && p.rentMax == null ? "Not provided"
 
 function Gallery({ photos, name }) {
   const [i, setI] = useState(0);
-  if (!photos.length) return <div className="gallery"><Photo className="gallery-main" src="" alt="" label="Photos not provided" /></div>;
+  const strip = useRef(null);
+  const count = photos.length;
+  // Keeps the selected thumbnail in view by scrolling the strip itself, never the page.
+  useEffect(() => {
+    const row = strip.current, thumb = row?.children[i];
+    if (thumb) row.scrollTo({ left: thumb.offsetLeft - (row.clientWidth - thumb.offsetWidth) / 2 });
+  }, [i]);
+  if (!count) return <div className="gallery"><Photo className="gallery-main" src="" alt="" label="Photos not provided" /></div>;
+  const many = count > 1;
+  const step = (d) => setI((n) => (n + d + count) % count);
+  // Left and right arrow keys change the photo while focus is anywhere in the gallery.
+  const onKeyDown = (e) => {
+    if (!many || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
+  };
   return (
-    <div className="gallery">
-      <Photo className="gallery-main" src={photos[i]} alt={`${name}, photo ${i + 1} of ${photos.length}`} />
-      {photos.length > 1 && (
-        <div className="gallery-thumbs" role="list">
+    <div className="gallery" role="group" aria-roledescription="carousel" aria-label={`Photos of ${name}`} tabIndex={many ? 0 : undefined} onKeyDown={onKeyDown}>
+      <div className="gallery-stage">
+        <Photo key={i} className="gallery-main" src={photos[i]} alt={`${name}, photo ${i + 1} of ${count}`} />
+        {many && (
+          <>
+            <button type="button" className="gallery-nav gallery-prev" onClick={() => step(-1)} aria-label="Previous photo"><ChevronLeft size={22} /></button>
+            <button type="button" className="gallery-nav gallery-next" onClick={() => step(1)} aria-label="Next photo"><ChevronRight size={22} /></button>
+            <span className="gallery-count" aria-hidden="true">{i + 1} / {count}</span>
+            <span className="visually-hidden" role="status">Photo {i + 1} of {count}</span>
+          </>
+        )}
+      </div>
+      {many && (
+        <div className="gallery-thumbs" role="list" ref={strip}>
           {photos.map((src, n) => (
             <button key={src + n} role="listitem" className={n === i ? "on" : ""} onClick={() => setI(n)} aria-label={`Show photo ${n + 1}`} aria-current={n === i}>
               <Photo src={src} alt="" />
@@ -283,7 +305,7 @@ export function PropertyPage({ id, isSaved, onSave, user }) {
   if (state.status === "loading") return <main className="page-shell route-page"><p role="status">Loading listing…</p></main>;
   if (state.status !== "ready") return (
     <main className="page-shell route-page">
-      <EmptyState title={state.status === "missing" ? "This listing isn’t available" : "We couldn’t load this listing"} action={<Link className="button button-dark" href={back}>Back to apartments</Link>}>
+      <EmptyState icon={state.status === "missing" ? undefined : <CloudOff size={22} />} title={state.status === "missing" ? "This listing isn’t available" : "We couldn’t load this listing"} action={<Link className="button button-dark" href={back}>Back to apartments</Link>}>
         {state.status === "missing" ? "It may have been leased, removed or the link may be wrong." : state.error}
       </EmptyState>
     </main>
@@ -293,7 +315,7 @@ export function PropertyPage({ id, isSaved, onSave, user }) {
   const s = p.summary;
   const hasContact = p.contactPhone || p.contactEmail || p.websiteUrl || p.tourUrl;
   return (
-    <main className="page-shell route-page property-page">
+    <main className={`page-shell route-page property-page ${p.contactPhone || p.tourUrl ? "has-contact-bar" : ""}`}>
       <Link href={back} className="text-link back-link"><ArrowLeft size={14} /> Back to results</Link>
       {state.preview && <p className="sample-banner" role="status">Staff preview. This listing is {p.status}, so renters can’t see it. Publish it from the staff console when it’s ready.</p>}
       {p.source === "Sample data" && <p className="sample-banner">Sample listing for the FindIt beta. This is not a real property — details and photos are illustrative.</p>}
@@ -317,7 +339,10 @@ export function PropertyPage({ id, isSaved, onSave, user }) {
           <Gallery photos={p.photos} name={p.name} />
 
           <section className={`availability-panel ${p.availabilityStale ? "is-stale" : ""}`} aria-labelledby="availability-heading">
-            <h2 id="availability-heading">Availability</h2>
+            <div className="availability-head">
+              <h2 id="availability-heading">Availability</h2>
+              <Freshness checkedAt={p.availabilityCheckedAt} stale={p.availabilityStale} lead="Checked" none="Not yet checked" />
+            </div>
             <p><AvailabilityBadge value={p.availability} /> {p.availabilityNote}</p>
             <p className="provenance">
               {p.availabilityCheckedAt ? <>Last checked <strong>{formatDate(p.availabilityCheckedAt)}</strong> ({daysAgo(p.availabilityCheckedAt)})</> : "Availability has not been checked yet"}
@@ -379,7 +404,7 @@ export function PropertyPage({ id, isSaved, onSave, user }) {
             {hasContact ? (
               <ul className="contact-list">
                 {p.contactPhone && <li><Phone size={15} /><a href={`tel:${p.contactPhone.replace(/[^\d+]/g, "")}`}>{p.contactPhone}</a></li>}
-                {p.contactEmail && <li><Mail size={15} /><a href={`mailto:${p.contactEmail}?subject=${encodeURIComponent(`Enquiry about ${p.name} (via FindIt)`)}`}>{p.contactEmail}</a></li>}
+                {p.contactEmail && <li><Mail size={15} /><a href={`mailto:${p.contactEmail}?subject=${encodeURIComponent(`Enquiry about ${p.name} (via FindIt)`)}`}>{breakableEmail(p.contactEmail)}</a></li>}
                 {p.websiteUrl && <li><Globe size={15} /><a href={p.websiteUrl} target="_blank" rel="noopener noreferrer">Property website <ExternalLink size={12} /></a></li>}
               </ul>
             ) : <p className="muted">Contact details haven’t been provided.</p>}

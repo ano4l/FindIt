@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, Check, ExternalLink, LogOut, Plus, T
 import { AMENITIES, AVAILABILITY, PETS, isStale, money } from "../shared/catalog.js";
 import { api, formatDate, daysAgo } from "./api.js";
 import { Brand } from "./account.jsx";
-import { Link } from "./ui.jsx";
+import { Freshness, Link } from "./ui.jsx";
 import "./workspace.css";
 import "./account.css";
 
@@ -55,7 +55,9 @@ export function StaffConsole({ user, onHome, onSignOut }) {
         <div className="staff-tabs" role="tablist">
           {TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setError(""); }}>
-              {t}{t === "Reports" && reportCount ? ` (${reportCount})` : ""}{t === "Messages" && messageCount ? ` (${messageCount})` : ""}
+              {t}
+              {t === "Reports" && reportCount > 0 && <span className="tab-count">{reportCount}<span className="visually-hidden"> open</span></span>}
+              {t === "Messages" && messageCount > 0 && <span className="tab-count">{messageCount}<span className="visually-hidden"> new</span></span>}
             </button>
           ))}
         </div>
@@ -77,7 +79,6 @@ function LoadFailed({ what, onRetry }) {
 }
 
 /* ------------------------------------------------------------ Listings */
-const staleDays = (p) => (p.availabilityCheckedAt ? Math.floor((Date.now() - new Date(p.availabilityCheckedAt).getTime()) / 86400000) : null);
 const needsAttention = (p) => isStale(p.availabilityCheckedAt) || !p.photos.length || !p.summary.rent || !p.floorPlans.length;
 
 function ListingsTab({ run, setError }) {
@@ -117,7 +118,6 @@ function ListingsTab({ run, setError }) {
             <tbody>
               {shown.map((r) => {
                 const stale = isStale(r.availabilityCheckedAt);
-                const days = staleDays(r);
                 return (
                   <tr key={r.id}>
                     <td>
@@ -133,13 +133,13 @@ function ListingsTab({ run, setError }) {
                         onChange={(e) => act(() => api.admin.setAvailability(r.id, e.target.value), `${r.name}: availability updated.`)}>
                         {Object.entries(AVAILABILITY).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                       </select>
-                      <small className={`checked ${stale ? "is-stale" : ""}`}>{stale && <AlertTriangle size={12} />} {days == null ? "Never checked" : `Checked ${daysAgo(r.availabilityCheckedAt)}`}</small>
+                      <Freshness className="checked" checkedAt={r.availabilityCheckedAt} stale={stale} lead="Checked" none="Never checked" />
                     </td>
                     <td><span className={`pill pill-${r.status}`}>{r.status}</span></td>
                     <td>{r.source}</td>
                     <td>{formatDate(r.lastUpdated)}{r.updatedBy && <><br /><small>by {r.updatedBy}</small></>}</td>
                     <td className="row-actions">
-                      <button onClick={() => setEditing(r.id)}>Edit</button>
+                      <button className="row-primary" onClick={() => setEditing(r.id)}>Edit</button>
                       <button onClick={() => act(() => api.admin.setAvailability(r.id, r.availability), `${r.name}: availability confirmed.`)} title="Record that you've checked availability today">Mark checked</button>
                       {r.status === "published"
                         ? <><a className="row-link" href={`/apartments/${encodeURIComponent(r.id)}`} target="_blank" rel="noopener noreferrer">View <ExternalLink size={11} /></a><button onClick={() => act(() => api.admin.setPropertyStatus(r.id, "hidden"), "Listing hidden.")}>Hide</button></>
@@ -353,15 +353,18 @@ function PropertyEditor({ id, run, onDone }) {
       </fieldset>
       <datalist id="staff-neighborhoods">{["The Heights", "Montrose", "Midtown", "Downtown", "EaDo", "Museum District", "Galleria", "Rice Village", "Medical Center", "Memorial", "Energy Corridor", "The Woodlands"].map((n) => <option key={n} value={n} />)}</datalist>
 
-      {saveError && <p className="form-error" role="alert">This listing wasn’t saved. {saveError}</p>}
-      <div className="form-actions">
-        <button type="button" className="button" onClick={onDone}>Cancel</button>
-        {id ? <button className="button button-dark" type="submit" disabled={busy || uploading}>{busy ? "Saving…" : "Save changes"}</button> : (
-          <>
-            <button className="button" type="submit" disabled={busy || uploading} onClick={() => { publishRef.current = false; }}>Save as hidden</button>
-            <button className="button button-dark" type="submit" disabled={busy || uploading} onClick={() => { publishRef.current = true; }}>Save and publish</button>
-          </>
-        )}
+      {/* Stays at the bottom of the window while the form is on screen, so staff can save from anywhere in it. */}
+      <div className="form-save-bar">
+        {saveError && <p className="form-error" role="alert">This listing wasn’t saved. {saveError}</p>}
+        <div className="form-actions">
+          <button type="button" className="button" onClick={onDone}>Cancel</button>
+          {id ? <button className="button button-dark" type="submit" disabled={busy || uploading} aria-busy={busy}>{busy ? "Saving…" : "Save changes"}</button> : (
+            <>
+              <button className="button" type="submit" disabled={busy || uploading} onClick={() => { publishRef.current = false; }}>Save as hidden</button>
+              <button className="button button-dark" type="submit" disabled={busy || uploading} aria-busy={busy} onClick={() => { publishRef.current = true; }}>Save and publish</button>
+            </>
+          )}
+        </div>
       </div>
 
       {history.length > 0 && (
@@ -456,7 +459,7 @@ function LocatorsTab({ run, setError }) {
                   <td>{r.source}</td>
                   <td>{formatDate(r.lastUpdated)}{r.updatedBy && <><br /><small>by {r.updatedBy}</small></>}</td>
                   <td className="row-actions">
-                    <button onClick={() => setEditing({ id: r.id, form: toLocatorForm(r) })}>Edit</button>
+                    <button className="row-primary" onClick={() => setEditing({ id: r.id, form: toLocatorForm(r) })}>Edit</button>
                     {r.status === "published"
                       ? <button onClick={() => act(() => api.admin.setStatus(r.id, "hidden"), "Profile hidden.")}>Hide</button>
                       : <button onClick={() => act(() => api.admin.setStatus(r.id, "published"), "Profile published.")}>Publish</button>}

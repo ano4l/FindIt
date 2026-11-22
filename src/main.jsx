@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Lock } from "lucide-react";
 import { AuthScreen, MemberAccount } from "./account.jsx";
 import { StaffConsole } from "./staff.jsx";
 import { api } from "./api.js";
@@ -104,7 +105,7 @@ function App() {
 
 function StaffOnly() {
   usePageTitle("Staff only");
-  return <main className="page-shell route-page empty-state"><h1>Staff only</h1><p>This area is for FindIt staff.</p><Link className="button button-dark" href="/">Return home</Link></main>;
+  return <main className="page-shell route-page empty-state"><span className="empty-icon" aria-hidden="true"><Lock size={22} /></span><h1>Staff only</h1><p>This area is for FindIt staff.</p><Link className="button button-dark" href="/">Return home</Link></main>;
 }
 
 // Reuse the root if this module is re-run (e.g. by hot reload in development).
