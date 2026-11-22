@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, ExternalLink, House, LogOut, Shield } from "lucide-react";
+import React, { useEffect, useId, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Check, Circle, ExternalLink, Eye, EyeOff, House, LogOut, Shield } from "lucide-react";
 import { AVAILABILITY, money } from "../shared/catalog.js";
 import { api } from "./api.js";
+import { Freshness } from "./ui.jsx";
 import "./workspace.css";
 import "./account.css";
 
@@ -11,6 +12,58 @@ export function Brand({ onHome }) {
       <span className="workspace-brand-mark"><House size={20} strokeWidth={2.7} /></span>
       <span>FINDIT<span>.</span></span><small>HTX</small>
     </button>
+  );
+}
+
+/* ------------------------------------------------------ Password field */
+// The same rule the server applies when a password is set, shown as a checklist so nobody has to guess.
+const PASSWORD_RULES = [
+  ["12 or more characters", (v) => v.length >= 12],
+  ["An uppercase letter", (v) => /[A-Z]/.test(v)],
+  ["A lowercase letter", (v) => /[a-z]/.test(v)],
+  ["A number", (v) => /\d/.test(v)],
+  ["A symbol", (v) => /[^A-Za-z0-9]/.test(v)],
+];
+
+// A password input with a show/hide button. With `rules`, it also lists the password rules and ticks each
+// one off as it is typed. The checklist is guidance only: the form and the server still enforce the rule.
+function PasswordField({ label, rules = false, ...props }) {
+  const [show, setShow] = useState(false);
+  const [value, setValue] = useState("");
+  const input = useRef(null);
+  const id = useId();
+  // The form clears itself after a successful change, so the checklist starts again too.
+  useEffect(() => {
+    const form = input.current?.form;
+    if (!form) return undefined;
+    const clear = () => { setValue(""); setShow(false); };
+    form.addEventListener("reset", clear);
+    return () => form.removeEventListener("reset", clear);
+  }, []);
+  return (
+    <div className="password-field">
+      <div className="password-input">
+        <label>{label}
+          <input {...props} ref={input} type={show ? "text" : "password"} onChange={(e) => setValue(e.target.value)} aria-describedby={rules ? `${id}-rules` : undefined} />
+        </label>
+        <button type="button" className="password-toggle" onClick={() => setShow((v) => !v)} aria-pressed={show} aria-label={`Show ${label.toLowerCase()}`} title={show ? "Hide password" : "Show password"}>
+          {show ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+      {rules && (
+        <ul className="password-rules" id={`${id}-rules`} aria-label="Password requirements">
+          {PASSWORD_RULES.map(([text, test]) => {
+            const met = test(value);
+            return (
+              <li key={text} className={met ? "is-met" : ""}>
+                {met ? <Check size={13} strokeWidth={3} aria-hidden="true" /> : <Circle size={13} aria-hidden="true" />}
+                <span>{text}</span><span className="visually-hidden">{met ? " (done)" : " (still needed)"}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -112,15 +165,13 @@ export function AuthScreen({ mode, token, emailOn = true, onMode, onHome, onSign
               {view === "signup" && <label>Full name<input name="name" autoComplete="name" required minLength={3} maxLength={80} pattern="[^ ]+ +.+" title="Enter at least your first and last name." /></label>}
               {view !== "reset" && <label>Email address<input type="email" name="email" autoComplete="email" required maxLength={320} pattern="[^ @]+@[^ @]+[.][^ @]{2,}" title="Enter a valid email address, such as name@example.com." /></label>}
               {view !== "forgot" && view !== "resend" && (
-                <label>{view === "reset" ? "New password" : "Password"}
-                  <input type="password" name="password" required minLength={view === "signin" ? 1 : 12} maxLength={200}
-                    pattern={view === "signin" ? undefined : "(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,}"}
-                    autoComplete={view === "signin" ? "current-password" : "new-password"}
-                    title={view === "signin" ? undefined : "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol."}
-                    placeholder={view === "signin" ? "" : "12+ characters, uppercase, lowercase, number, symbol"} />
-                </label>
+                <PasswordField label={view === "reset" ? "New password" : "Password"} rules={view !== "signin"}
+                  name="password" required minLength={view === "signin" ? 1 : 12} maxLength={200}
+                  pattern={view === "signin" ? undefined : "(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^A-Za-z0-9]).{12,}"}
+                  autoComplete={view === "signin" ? "current-password" : "new-password"}
+                  title={view === "signin" ? undefined : "Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol."} />
               )}
-              <button className="button button-dark auth-submit" type="submit" disabled={busy}>
+              <button className="button button-dark auth-submit" type="submit" disabled={busy} aria-busy={busy}>
                 {busy ? "Please wait…" : { signin: "Sign in", signup: "Create account", forgot: "Send reset link", reset: "Save new password", resend: "Send confirmation link" }[view]}
                 <ArrowRight size={16} />
               </button>
@@ -145,11 +196,11 @@ export function AuthScreen({ mode, token, emailOn = true, onMode, onHome, onSign
 }
 
 /* ------------------------------------------------------ Member account */
-function SavedRow({ image, title, sub, children }) {
+function SavedRow({ image, title, sub, meta, children }) {
   return (
     <li>
       {image ? <img src={image} alt="" /> : <span className="saved-thumb-empty" aria-hidden="true" />}
-      <div><strong>{title}</strong><span>{sub}</span></div>
+      <div className="saved-text"><strong>{title}</strong><span>{sub}</span>{meta && <div className="saved-meta">{meta}</div>}</div>
       <div className="saved-actions">{children}</div>
     </li>
   );
@@ -192,7 +243,8 @@ export function MemberAccount({ user, saved, savedError = "", savedLoading = fal
           <ul className="saved-list saved-properties">
             {properties.map((p) => (
               <SavedRow key={p.id} image={p.photos?.[0]} title={p.name}
-                sub={<>{[p.neighborhood, p.summary?.rent ? `${money(p.summary.rent[0])}+ /mo` : "Price not provided"].filter(Boolean).join(" · ")} · <span className={`avail avail-${p.availability}`}>{AVAILABILITY[p.availability]}</span></>}>
+                sub={[p.neighborhood, p.summary?.rent ? `${money(p.summary.rent[0])}+ /mo` : "Price not provided"].filter(Boolean).join(" · ")}
+                meta={<><span className={`avail avail-${p.availability}`}>{AVAILABILITY[p.availability]}</span><Freshness checkedAt={p.availabilityCheckedAt} stale={p.availabilityStale} /></>}>
                 <button className="link-button" onClick={() => onOpen(`/apartments/${encodeURIComponent(p.id)}`)}>View listing</button>
                 <button className="link-button danger" onClick={() => onUnsave("properties", p)}>Remove</button>
               </SavedRow>
@@ -221,12 +273,12 @@ export function MemberAccount({ user, saved, savedError = "", savedLoading = fal
         <section className="account-settings" aria-labelledby="password-heading">
           <h2 id="password-heading">Change password</h2>
           <form className="auth-form" onSubmit={changePassword}>
-            <label>Current password<input type="password" name="currentPassword" autoComplete="current-password" required /></label>
-            <label>New password<input type="password" name="password" autoComplete="new-password" minLength={12} maxLength={200} pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,}" title="Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol." required /></label>
-            <label>Confirm new password<input type="password" name="confirmPassword" autoComplete="new-password" minLength={12} maxLength={200} required /></label>
+            <PasswordField label="Current password" name="currentPassword" autoComplete="current-password" required />
+            <PasswordField label="New password" rules name="password" autoComplete="new-password" minLength={12} maxLength={200} pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,}" title="Use 12 or more characters with uppercase and lowercase letters, a number, and a symbol." required />
+            <PasswordField label="Confirm new password" name="confirmPassword" autoComplete="new-password" minLength={12} maxLength={200} required />
             {passwordState.error && <p className="form-error" role="alert">{passwordState.error}</p>}
             {passwordState.message && <p className="form-ok" role="status">{passwordState.message}</p>}
-            <button className="button button-dark" disabled={passwordState.busy}>{passwordState.busy ? "Saving…" : "Update password"}</button>
+            <button className="button button-dark" disabled={passwordState.busy} aria-busy={passwordState.busy}>{passwordState.busy ? "Saving…" : "Update password"}</button>
           </form>
         </section>
         <p className="account-note"><Shield size={14} /> Saved searches, named shortlists and email alerts arrive with memberships in a later release.</p>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, Bookmark, Building2, CalendarCheck, Check, ClipboardList, Flag, Handshake, MapPin, Search, ShieldCheck, Users } from "lucide-react";
+import { ArrowRight, Bookmark, Building2, CalendarCheck, Check, ChevronDown, ClipboardList, Compass, Flag, Handshake, MapPin, Search, ShieldCheck, Users } from "lucide-react";
 import { CONTACT_TOPICS, NEIGHBORHOODS } from "../shared/catalog.js";
 import { api } from "./api.js";
 import { Link, usePageTitle } from "./ui.jsx";
@@ -75,7 +75,8 @@ function InfoPage({ eyebrow = "FINDIT HTX", title, intro, children }) {
     </main>
   );
 }
-const Faq = ({ items }) => <div className="faq-list info-faq">{items.map(([q, a]) => <details key={q}><summary>{q}</summary><p>{a}</p></details>)}</div>;
+// Each question opens and closes on its own; <details> gives keyboard and screen-reader support for free.
+const Faq = ({ items }) => <div className="faq-list info-faq">{items.map(([q, a]) => <details key={q}><summary>{q}<ChevronDown className="faq-chevron" size={18} aria-hidden="true" /></summary><p>{a}</p></details>)}</div>;
 
 export function HowItWorksPage() {
   return (
@@ -198,7 +199,7 @@ export function ContactPage({ search }) {
         <label>How can we help?<textarea name="message" rows="5" minLength="10" maxLength="2000" required /></label>
         {state.error && <p className="form-error" role="alert">{state.error}</p>}
         {state.message && <p className="form-ok" role="status">{state.message}</p>}
-        <button className="button button-dark" disabled={state.busy}>{state.busy ? "Sending…" : "Send message"} <ArrowRight size={15} /></button>
+        <button className="button button-dark" disabled={state.busy} aria-busy={state.busy}>{state.busy ? "Sending…" : "Send message"} <ArrowRight size={15} /></button>
       </form>
     </InfoPage>
   );
@@ -244,6 +245,7 @@ export function NotFoundPage() {
   usePageTitle("Page not found");
   return (
     <main className="page-shell route-page empty-state">
+      <span className="empty-icon" aria-hidden="true"><Compass size={22} /></span>
       <h1>We couldn’t find that page</h1>
       <p>Check the address, or start a new apartment search.</p>
       <Link className="button button-dark" href="/apartments">Search apartments</Link>
